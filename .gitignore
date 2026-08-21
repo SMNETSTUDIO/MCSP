@@ -1,0 +1,9 @@
+node_modules/
+data/
+instances/
+backups/
+npm-debug.log*
+.DS_Store
+*.log
+logs/
+bin/

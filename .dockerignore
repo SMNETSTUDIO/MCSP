@@ -1,0 +1,13 @@
+node_modules
+data
+instances
+backups
+logs
+bin
+.git
+.github
+*.md
+.dockerignore
+Dockerfile
+docker-compose.yml
+ecosystem.config.js

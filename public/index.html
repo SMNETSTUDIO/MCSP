@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCSP — MineCraft Server Panel</title>
+  <script>
+    /* 在样式渲染前应用外观设置,避免闪烁 */
+    (function () {
+      try {
+        var a = JSON.parse(localStorage.getItem('mcsp_appearance') || '{}');
+        var t = a.theme || 'dark';
+        if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = t;
+        document.documentElement.dataset.style = a.style || 'pixel';
+        document.documentElement.dataset.bg = a.bg || 'aurora';
+        document.documentElement.dataset.density = a.density || 'comfortable';
+        if (a.accent) document.documentElement.style.setProperty('--acc-rgb', a.accent);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'><rect width='16' height='16' fill='%236d4b2d'/><rect width='16' height='5' fill='%2355a848'/><rect y='4' width='2' height='1' fill='%23478c3c'/><rect x='5' y='4' width='3' height='1' fill='%23478c3c'/><rect x='11' y='4' width='2' height='1' fill='%23478c3c'/><rect x='2' y='7' width='2' height='2' fill='%237a5533'/><rect x='9' y='6' width='2' height='2' fill='%237a5533'/><rect x='5' y='10' width='2' height='2' fill='%235c3e24'/><rect x='12' y='11' width='2' height='2' fill='%237a5533'/><rect x='1' y='12' width='2' height='2' fill='%235c3e24'/></svg>" />
+</head>
+<body>
+  <!-- ambient background -->
+  <div class="bg">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+    <div class="blob b4"></div>
+    <div class="noise"></div>
+  </div>
+
+  <div class="layout">
+    <!-- ───────── Sidebar ───────── -->
+    <aside class="sidebar glass">
+      <div class="brand">
+        <!-- 像素风草方块(纯 CSS 纹理) -->
+        <div class="brand-icon"></div>
+        <div>
+          <div class="brand-name">MCSP</div>
+          <div class="brand-sub">Server Panel</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-view="overview"><span class="nav-ico">⌂</span>总览</button>
+
+        <div class="nav-group" data-group="instance">
+          <button class="nav-toggle" type="button"><span class="nav-caret">▾</span>实例</button>
+          <div class="nav-group-body">
+            <div class="inst-picker glass-inner" id="inst-picker">
+              <span id="inst-picker-icon">⛰️</span>
+              <select id="inst-select" aria-label="选择实例"></select>
+            </div>
+            <button class="nav-item" data-view="dashboard"><span class="nav-ico">◧</span>仪表盘</button>
+            <button class="nav-item" data-view="console"><span class="nav-ico">❯_</span>控制台</button>
+            <button class="nav-item" data-view="players"><span class="nav-ico">☺</span>玩家</button>
+            <button class="nav-item" data-view="worlds"><span class="nav-ico">◍</span>世界</button>
+            <button class="nav-item" data-view="plugins"><span class="nav-ico">✦</span>插件</button>
+            <button class="nav-item" data-view="files"><span class="nav-ico">🗀</span>文件</button>
+            <button class="nav-item" data-view="tasks"><span class="nav-ico">◷</span>计划任务</button>
+            <button class="nav-item" data-view="tunnel"><span class="nav-ico">⇄</span>内网穿透</button>
+            <button class="nav-item" data-view="backups"><span class="nav-ico">⧉</span>备份</button>
+            <button class="nav-item" data-view="settings"><span class="nav-ico">⚙</span>设置</button>
+          </div>
+        </div>
+
+        <div class="nav-group admin-only" data-group="panel" hidden>
+          <button class="nav-toggle" type="button"><span class="nav-caret">▾</span>面板</button>
+          <div class="nav-group-body">
+            <button class="nav-item" data-view="users"><span class="nav-ico">◉</span>用户管理</button>
+            <button class="nav-item" data-view="system"><span class="nav-ico">✳</span>系统设置</button>
+          </div>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer glass-inner">
+        <div class="user-avatar" id="me-avatar">A</div>
+        <div class="side-status">
+          <div id="me-name">—</div>
+          <div class="dim" id="me-role">—</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="icon-btn" id="btn-passwd" title="修改密码">🔑</button>
+        <button class="icon-btn danger" id="btn-logout" title="退出登录">⏻</button>
+      </div>
+    </aside>
+
+    <!-- ───────── Main ───────── -->
+    <main class="main">
+      <header class="topbar glass">
+        <div>
+          <h1 id="view-title">总览</h1>
+          <div class="dim" id="topbar-sub">所有实例一览</div>
+        </div>
+        <div class="top-actions">
+          <div class="top-actions" id="inst-actions" hidden>
+            <span class="pill pill-gray" id="top-state">已停止</span>
+            <button class="btn btn-green" id="btn-start">▶ 启动</button>
+            <button class="btn btn-amber" id="btn-restart">↻ 重启</button>
+            <button class="btn btn-red" id="btn-stop">■ 停止</button>
+            <button class="btn btn-ghost" id="btn-kill" title="强制终止">强杀</button>
+          </div>
+          <button class="btn btn-ghost" id="btn-appearance" title="外观设置">🎨</button>
+        </div>
+      </header>
+
+      <!-- 公告横幅(管理员在系统设置里发布,按内容记忆关闭状态) -->
+      <div class="announce glass" id="announce-bar" hidden>
+        <span class="announce-ico">📢</span>
+        <div class="announce-text" id="announce-text"></div>
+        <button class="icon-btn" id="announce-close" title="关闭">✕</button>
+      </div>
+
+      <!-- Overview -->
+      <section class="view active" id="view-overview">
+        <div class="card glass host-card">
+          <div class="card-title">宿主机 <span class="dim small" id="host-name"></span></div>
+          <div class="host-grid" id="host-grid"></div>
+        </div>
+        <div class="overview-head">
+          <div class="card-title" style="margin:0">实例列表</div>
+          <button class="btn btn-blue" id="inst-create">＋ 新建实例</button>
+        </div>
+        <div class="inst-grid" id="inst-grid"></div>
+      </section>
+
+      <!-- Dashboard -->
+      <section class="view" id="view-dashboard">
+        <div class="stat-grid">
+          <div class="card glass stat">
+            <div class="stat-chip chip-state">⏻</div>
+            <div class="stat-label">状态</div>
+            <div class="stat-value" id="stat-state"><span class="pill pill-gray">已停止</span></div>
+            <div class="stat-foot dim" id="stat-uptime">运行时长 —</div>
+          </div>
+          <div class="card glass stat">
+            <div class="stat-chip chip-players">☺</div>
+            <div class="stat-label">在线玩家</div>
+            <div class="stat-value" id="stat-players">0 <span class="dim small">/ 20</span></div>
+            <div class="stat-foot dim">当前 / 上限</div>
+          </div>
+          <div class="card glass stat">
+            <div class="stat-chip chip-tps">⚡</div>
+            <div class="stat-label">CPU</div>
+            <div class="stat-value" id="stat-cpu">0<span class="dim small">%</span></div>
+            <div class="stat-foot"><div class="bar"><i id="bar-cpu"></i></div></div>
+          </div>
+          <div class="card glass stat">
+            <div class="stat-chip chip-ram">▦</div>
+            <div class="stat-label">内存</div>
+            <div class="stat-value" id="stat-ram">0 <span class="dim small">MB</span></div>
+            <div class="stat-foot"><div class="bar"><i id="bar-ram"></i></div></div>
+          </div>
+        </div>
+
+        <div class="dash-row">
+          <div class="card glass chart-card">
+            <div class="card-title">性能监控 <span class="dim small">CPU % · 内存 MB</span></div>
+            <canvas id="chart" height="190"></canvas>
+            <div class="legend">
+              <span><i class="dot dot-blue"></i>CPU</span>
+              <span><i class="dot dot-green"></i>内存</span>
+            </div>
+          </div>
+          <div class="card glass">
+            <div class="card-title">实时动态</div>
+            <div id="dash-log" class="mini-log"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Console -->
+      <section class="view" id="view-console">
+        <div class="card glass console-card">
+          <div id="console" class="console"></div>
+          <div class="console-input glass-inner">
+            <span class="prompt">/</span>
+            <input id="cmd-input" type="text" placeholder="输入命令,例如 say Hello 或 time set day…" autocomplete="off" />
+            <button class="btn btn-blue" id="cmd-send">发送</button>
+          </div>
+          <div class="quick-cmds">
+            <button class="chip" data-cmd="list">list</button>
+            <button class="chip" data-cmd="tps">tps</button>
+            <button class="chip" data-cmd="save-all">save-all</button>
+            <button class="chip" data-cmd="time set day">time set day</button>
+            <button class="chip" data-cmd="weather clear">weather clear</button>
+            <button class="chip" data-cmd="say 服务器将于 5 分钟后重启">广播重启</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Players -->
+      <section class="view" id="view-players">
+        <div class="players-row">
+          <div class="card glass">
+            <div class="card-title">在线玩家 <span class="pill pill-blue" id="pl-count">0</span></div>
+            <div id="player-list" class="player-list"></div>
+          </div>
+          <div class="stack">
+            <div class="card glass">
+              <div class="card-title">封禁列表</div>
+              <div id="ban-list" class="tag-list"></div>
+            </div>
+            <div class="card glass">
+              <div class="card-title">白名单</div>
+              <div id="wl-list" class="tag-list"></div>
+              <div class="inline-add">
+                <input id="wl-input" type="text" placeholder="玩家名…" />
+                <button class="btn btn-blue small-btn" id="wl-add">添加</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Worlds -->
+      <section class="view" id="view-worlds">
+        <div id="world-grid" class="world-grid"></div>
+      </section>
+
+      <!-- Plugins -->
+      <section class="view" id="view-plugins">
+        <div id="plugin-list" class="plugin-list"></div>
+      </section>
+
+      <!-- Files -->
+      <section class="view" id="view-files">
+        <div class="card glass files-card">
+          <div class="files-toolbar">
+            <div class="breadcrumb" id="fm-crumb"></div>
+            <div class="spacer"></div>
+            <button class="icon-btn" id="fm-newfile">＋ 文件</button>
+            <button class="icon-btn" id="fm-newdir">＋ 文件夹</button>
+          </div>
+          <div class="file-table" id="fm-list"></div>
+        </div>
+        <div class="card glass editor-card" id="fm-editor" hidden>
+          <div class="files-toolbar">
+            <div class="card-title" style="margin:0" id="fm-editor-name">编辑</div>
+            <div class="spacer"></div>
+            <button class="btn btn-blue small-btn" id="fm-save">保存</button>
+            <button class="icon-btn" id="fm-close">关闭</button>
+          </div>
+          <textarea id="fm-content" spellcheck="false"></textarea>
+        </div>
+      </section>
+
+      <!-- Tasks -->
+      <section class="view" id="view-tasks">
+        <div class="card glass">
+          <div class="card-title">新建计划任务</div>
+          <div class="task-form">
+            <input id="task-name" type="text" placeholder="任务名称,如 凌晨自动重启" />
+            <select id="task-action">
+              <option value="restart">重启实例</option>
+              <option value="backup">创建备份</option>
+              <option value="command">执行命令</option>
+              <option value="start">启动实例</option>
+              <option value="stop">停止实例</option>
+            </select>
+            <input id="task-payload" type="text" placeholder="命令内容(仅执行命令时)" hidden />
+            <select id="task-sched-type">
+              <option value="interval">按间隔</option>
+              <option value="daily">每天定时</option>
+            </select>
+            <input id="task-minutes" type="number" min="1" value="60" title="分钟" />
+            <input id="task-time" type="time" value="04:00" hidden />
+            <button class="btn btn-blue" id="task-create">创建</button>
+          </div>
+        </div>
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title">任务列表</div>
+          <div id="task-list" class="backup-list"></div>
+        </div>
+      </section>
+
+      <!-- Tunnel -->
+      <section class="view" id="view-tunnel">
+        <div class="card glass">
+          <div class="card-title">穿透组件 <span class="dim small">面板级安装,所有实例共用二进制</span></div>
+          <div id="tunnel-components" class="backup-list"></div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title">实例穿透配置 <span class="dim small">每个实例独立,隧道指向本实例端口</span></div>
+          <div class="task-form" style="margin-bottom:14px">
+            <select id="tn-type">
+              <option value="none">不启用</option>
+              <option value="bore">bore</option>
+              <option value="playit">playit.gg</option>
+              <option value="pinggy">Pinggy</option>
+              <option value="serveo">Serveo</option>
+              <option value="ngrok">ngrok</option>
+              <option value="frpc">frpc</option>
+            </select>
+          </div>
+          <div id="tn-bore" class="field-col" hidden>
+            <div class="row-2">
+              <input id="tn-bore-server" type="text" placeholder="服务器(默认 bore.pub 免费公共)" />
+              <input id="tn-bore-rport" type="number" placeholder="远程端口(默认随机)" />
+            </div>
+            <input id="tn-bore-secret" type="password" placeholder="secret(自建 bore server 时使用,可选)" autocomplete="off" />
+            <div class="dim small">免费、免注册、纯 TCP。默认使用官方公共服务器 bore.pub,分配随机端口;也可自建 <code>bore server</code>。</div>
+          </div>
+          <div id="tn-pinggy" class="field-col" hidden>
+            <input id="tn-pinggy-token" type="password" placeholder="Pinggy token(可选,不填为匿名隧道)" autocomplete="off" />
+            <div class="dim small">走 443 端口的 SSH 隧道,防火墙友好。匿名隧道约 60 分钟断开;在 <a href="https://pinggy.io" target="_blank" rel="noopener" style="color:var(--blue)">pinggy.io</a> 注册后填 token 可稳定使用。</div>
+          </div>
+          <div id="tn-serveo" class="field-col" hidden>
+            <input id="tn-serveo-rport" type="number" placeholder="远程端口(默认随机)" />
+            <div class="dim small">基于 SSH,免费。TCP 转发需要账户:在
+              <a href="https://console.serveo.net/settings" target="_blank" rel="noopener" style="color:var(--blue)">console.serveo.net</a>
+              注册<b>面板的 SSH 公钥</b>(上方组件列表 ssh 行 →「复制公钥」)。公网地址为 serveousercontent.com:端口。<br>
+              ⚠️ 实测免费档的 TCP 数据转发可能不稳定(连接被服务端重置),优先推荐 bore / Pinggy。</div>
+          </div>
+          <div id="tn-playit" class="field-col" hidden>
+            <div class="dim small">
+              免费、无需绑卡、无需自备服务器,对 Minecraft 优化。无需在此填写任何参数:<br>
+              1. 保存配置后点「▶ 启动穿透」,首次会生成绑定链接,打开并登录 playit.gg 完成绑定<br>
+              2. 在 <a href="https://playit.gg/account/tunnels" target="_blank" rel="noopener" style="color:var(--blue)">playit.gg 控制台</a>添加 Minecraft Java 隧道,本地地址填 <code>127.0.0.1:实例端口</code><br>
+              3. 绑定信息按实例独立保存,之后启动免绑定
+            </div>
+          </div>
+          <div id="tn-ngrok" class="field-col" hidden>
+            <input id="tn-ngrok-token" type="password" placeholder="ngrok Authtoken(在 dashboard.ngrok.com 获取)" autocomplete="off" />
+            <div class="dim small">⚠️ ngrok 免费账户使用 TCP 隧道需先在
+              <a href="https://dashboard.ngrok.com/settings#id-verification" target="_blank" rel="noopener" style="color:var(--blue)">ngrok 后台绑定一张银行卡</a>(仅验证身份,不会扣费)。
+              每次启动分配随机地址,例如 0.tcp.jp.ngrok.io:14582。</div>
+          </div>
+          <div id="tn-frpc" class="field-col" hidden>
+            <div class="row-2">
+              <input id="tn-frpc-addr" type="text" placeholder="frps 服务器地址,如 1.2.3.4" />
+              <input id="tn-frpc-port" type="number" placeholder="frps 端口(默认 7000)" />
+            </div>
+            <div class="row-2">
+              <input id="tn-frpc-token" type="password" placeholder="auth.token(可选)" autocomplete="off" />
+              <input id="tn-frpc-rport" type="number" placeholder="远程端口(默认同实例端口)" />
+            </div>
+            <div class="row-2">
+              <input id="tn-frpc-user" type="text" placeholder="用户名 user(可选,frps-panel 等)" autocomplete="off" />
+              <input id="tn-frpc-meta" type="password" placeholder="用户密码 metadatas.token(可选)" autocomplete="off" />
+            </div>
+            <div class="dim small">自建 frps 只需填地址 / 端口 / token;使用 <b>frps-panel</b> 等多用户鉴权插件的服务商,还需填用户名(user)与用户密码(metadatas.token)。</div>
+          </div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:16px">
+            <button class="btn btn-blue" id="tn-save">保存配置</button>
+          </div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title">隧道状态</div>
+          <div class="tunnel-status">
+            <span class="pill pill-gray" id="tn-state">未启动</span>
+            <code id="tn-addr" class="tn-addr" hidden></code>
+            <button class="icon-btn" id="tn-copy" hidden>复制地址</button>
+            <button class="icon-btn" id="tn-check" hidden>测试连通性</button>
+            <a id="tn-claim" class="btn btn-amber small-btn" href="#" target="_blank" rel="noopener" hidden>🔗 打开绑定链接</a>
+            <div class="spacer"></div>
+            <button class="btn btn-green" id="tn-start">▶ 启动穿透</button>
+            <button class="btn btn-red" id="tn-stop">■ 停止</button>
+          </div>
+          <div class="tn-error" id="tn-error" hidden></div>
+          <div class="dim small" style="margin-top:12px">隧道进程独立于服务端进程:重启实例不会断开隧道。公网地址建立后直接发给玩家即可加入。</div>
+        </div>
+      </section>
+
+      <!-- Backups -->
+      <section class="view" id="view-backups">
+        <div class="card glass">
+          <div class="card-title row-between">
+            <span>备份管理</span>
+            <button class="btn btn-blue" id="backup-create">＋ 立即备份</button>
+          </div>
+          <div id="backup-list" class="backup-list"></div>
+        </div>
+      </section>
+
+      <!-- Settings -->
+      <section class="view" id="view-settings">
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>实例配置</span>
+            <button class="btn btn-blue" id="inst-cfg-save">保存</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row"><label>内存上限 -Xmx(MB)</label><input id="cfg-xmx" type="number" min="512" max="65536" step="256" /></div>
+            <div class="prop-row">
+              <label>外置登录(authlib-injector)</label>
+              <label class="switch prop-switch"><input type="checkbox" id="cfg-ygg-on"><span class="slider"></span></label>
+            </div>
+            <div class="prop-row"><label>Yggdrasil API 地址</label><input id="cfg-ygg-url" type="text" placeholder="如 https://littleskin.cn/api/yggdrasil" /></div>
+          </div>
+          <div class="dim small" style="margin-top:14px">
+            范围 512 ~ 65536 MB;运行中修改需重启实例后生效。<br>
+            外置登录通过 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
+            将玩家认证转发到皮肤站的 Yggdrasil API(如 LittleSkin)。启用后首次保存会自动下载 authlib-injector;
+            服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。
+          </div>
+        </div>
+        <div class="card glass">
+          <div class="card-title row-between">
+            <span>server.properties</span>
+            <button class="btn btn-blue" id="props-save">保存更改</button>
+          </div>
+          <div id="props-grid" class="props-grid"></div>
+          <div class="dim small" style="margin-top:14px">运行中修改需重启实例后生效。</div>
+        </div>
+      </section>
+
+      <!-- Users (admin) -->
+      <section class="view" id="view-users">
+        <div class="card glass">
+          <div class="card-title">新建用户</div>
+          <div class="task-form">
+            <input id="user-name" type="text" placeholder="用户名" />
+            <input id="user-pass" type="password" placeholder="密码(至少 6 位)" />
+            <select id="user-role">
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
+            </select>
+            <button class="btn btn-blue" id="user-create">创建</button>
+          </div>
+          <div class="task-form" id="user-limits-row" style="margin-top:10px">
+            <input id="user-lim-inst" type="number" min="1" max="12" placeholder="实例数上限(默认 1)" />
+            <input id="user-lim-mem" type="number" min="512" max="65536" step="256" placeholder="内存配额 MB(默认 2048)" />
+            <input id="user-lim-cpu" type="number" min="1" placeholder="CPU 核数(默认 2)" />
+          </div>
+          <div class="dim small" style="margin-top:10px">普通用户的实例互相隔离(只有管理员能看到全部);内存为其全部实例 -Xmx 之和的上限,CPU 为启动时绑定的核数(taskset)。管理员不受限。</div>
+        </div>
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title">用户列表 <span class="dim small" id="user-count"></span></div>
+          <div id="user-list" class="backup-list"></div>
+          <div class="user-pager" id="user-pager" hidden>
+            <button class="btn btn-ghost small-btn" data-upage="prev">‹ 上一页</button>
+            <span class="dim small" id="user-pager-info"></span>
+            <button class="btn btn-ghost small-btn" data-upage="next">下一页 ›</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- System settings (admin) -->
+      <section class="view" id="view-system">
+        <div class="card glass">
+          <div class="card-title row-between">
+            <span>系统设置</span>
+            <button class="btn btn-blue" id="sys-save">保存</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row">
+              <label>开放注册(OAuth 未绑定身份可自动建号)</label>
+              <label class="switch prop-switch"><input type="checkbox" id="sys-reg"><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="prop-row" style="margin-top:14px">
+            <label>公告(所有用户登录后顶部可见;留空则不显示)</label>
+            <textarea id="sys-announcement" rows="3" maxlength="500" placeholder="例如:本周六 22:00 停机维护,预计 30 分钟"></textarea>
+          </div>
+          <div class="dim small" style="margin-top:14px">
+            「开放注册」是总开关:关闭后即使 OAuth 配置里开着「自动建号」,新身份也无法注册(已有账号不受影响)。
+            公告修改后立即对所有用户生效;用户关掉的公告再次编辑后会重新弹出。
+          </div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
+            <span>OAuth 第三方登录 <span class="task-badge off" id="og-status">未启用</span></span>
+            <button class="btn btn-blue" id="og-save">保存</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row"><label>提供商名称(登录按钮显示)</label><input id="og-name" placeholder="如 Linux DO" /></div>
+            <div class="prop-row"><label>Client ID</label><input id="og-cid" autocomplete="off" /></div>
+            <div class="prop-row"><label>Client Secret</label><input id="og-csec" type="password" autocomplete="new-password" /></div>
+            <div class="prop-row"><label>Scope</label><input id="og-scope" placeholder="read" /></div>
+            <div class="prop-row"><label>授权端点 authorize URL</label><input id="og-auth" placeholder="https://…/oauth2/authorize" /></div>
+            <div class="prop-row"><label>令牌端点 token URL</label><input id="og-token" placeholder="https://…/oauth2/token" /></div>
+            <div class="prop-row"><label>用户信息端点 userinfo URL</label><input id="og-info" placeholder="https://…/api/user" /></div>
+            <div class="prop-row"><label>回调地址(留空自动生成)</label><input id="og-redirect" placeholder="https://面板域名/api/auth/oauth/callback" /></div>
+            <div class="prop-row"><label>未绑定身份自动创建用户</label>
+              <label class="switch prop-switch"><input type="checkbox" id="og-autocreate"><span class="slider"></span></label>
+            </div>
+            <div class="prop-row"><label>建号配额:实例数上限</label><input id="og-lim-inst" type="number" min="1" max="12" /></div>
+            <div class="prop-row"><label>建号配额:内存 MB(全部实例 -Xmx 之和)</label><input id="og-lim-mem" type="number" min="512" max="65536" step="256" /></div>
+            <div class="prop-row"><label>建号配额:CPU 核数</label><input id="og-lim-cpu" type="number" min="1" /></div>
+          </div>
+          <div class="dim small" style="margin-top:14px">
+            标准 OAuth2 授权码流程;在提供商侧登记的回调地址为 <code>&lt;面板地址&gt;/api/auth/oauth/callback</code>。
+            身份标识按 userinfo 的 <code>id → sub → username</code> 顺序取;已有账号可在「修改密码」弹窗里绑定第三方身份。
+            「建号配额」是 OAuth 首次登录自动创建的用户拿到的资源上限,建号后可在用户管理里按人单独调整。
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- user limits modal -->
+  <div class="modal-mask" id="limits-modal" hidden>
+    <div class="card glass modal">
+      <div class="card-title">资源配额 <span class="dim small" id="limits-user"></span></div>
+      <div class="field-col">
+        <label class="dim small">实例数上限</label>
+        <input id="lim-inst" type="number" min="1" max="12" />
+        <label class="dim small">内存配额(全部实例 -Xmx 之和,MB)</label>
+        <input id="lim-mem" type="number" min="512" max="65536" step="256" />
+        <label class="dim small">CPU 核数(实例启动时绑定,重启生效)</label>
+        <input id="lim-cpu" type="number" min="1" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="lim-cancel">取消</button>
+        <button class="btn btn-blue" id="lim-ok">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- password modal -->
+  <div class="modal-mask" id="pw-modal" hidden>
+    <div class="card glass modal">
+      <div class="card-title">修改密码</div>
+      <div class="field-col">
+        <input id="pw-old" type="password" placeholder="当前密码" />
+        <input id="pw-new" type="password" placeholder="新密码(至少 6 位)" />
+        <input id="pw-new2" type="password" placeholder="重复新密码" />
+      </div>
+      <div id="oauth-bind-row" hidden style="margin-top:12px">
+        <button class="btn btn-ghost" id="oauth-bind-btn" style="width:100%"></button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="pw-cancel">取消</button>
+        <button class="btn btn-blue" id="pw-ok">确认修改</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- create instance modal -->
+  <div class="modal-mask" id="inst-modal" hidden>
+    <div class="card glass modal">
+      <div class="card-title">新建实例 <span class="dim small">从官方源下载服务端</span></div>
+      <div class="field-col">
+        <input id="ni-name" type="text" placeholder="实例名称,如 生存服 · Survival" />
+        <div class="row-2">
+          <select id="ni-type"><option value="">加载类型…</option></select>
+          <select id="ni-version"><option value="">加载版本列表…</option></select>
+        </div>
+        <div class="dim small" id="ni-type-hint" hidden></div>
+        <div class="row-2">
+          <input id="ni-port" type="number" placeholder="端口 25565" />
+          <select id="ni-gamemode">
+            <option value="survival">生存</option>
+            <option value="creative">创造</option>
+            <option value="adventure">冒险</option>
+          </select>
+        </div>
+        <div class="row-2">
+          <select id="ni-icon">
+            <option>🌳</option><option>⛰️</option><option>🏗️</option><option>🎯</option>
+            <option>🏝️</option><option>🐉</option><option>⚔️</option><option>🧭</option>
+          </select>
+          <input id="ni-xmx" type="number" placeholder="内存上限 MB(默认 2048)" min="512" max="65536" step="256" />
+        </div>
+        <label class="eula-row" id="ni-eula-row">
+          <input type="checkbox" id="ni-eula" />
+          <span>我已阅读并同意 <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft EULA</a>(安装时将写入 eula=true)</span>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="ni-cancel">取消</button>
+        <button class="btn btn-blue" id="ni-ok">下载并安装</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- appearance modal -->
+  <div class="modal-mask" id="ap-modal" hidden>
+    <div class="card glass modal">
+      <div class="card-title">外观设置 <span class="dim small">保存在本浏览器</span></div>
+
+      <div class="appearance-row">
+        <div class="appearance-label">界面风格</div>
+        <div class="seg-group" id="ap-style">
+          <button class="seg" data-val="pixel">🟩 像素风</button>
+          <button class="seg" data-val="glass">🧊 液态玻璃</button>
+        </div>
+      </div>
+
+      <div class="appearance-row">
+        <div class="appearance-label">主题模式</div>
+        <div class="seg-group" id="ap-theme">
+          <button class="seg" data-val="dark">🌙 深色</button>
+          <button class="seg" data-val="light">☀️ 浅色</button>
+          <button class="seg" data-val="auto">🖥 跟随系统</button>
+        </div>
+      </div>
+
+      <div class="appearance-row">
+        <div class="appearance-label">主题色</div>
+        <div class="swatches" id="ap-accent">
+          <button class="swatch" data-val="10, 132, 255"  style="background:#0a84ff" title="冰蓝"></button>
+          <button class="swatch" data-val="48, 209, 88"   style="background:#30d158" title="翡翠"></button>
+          <button class="swatch" data-val="191, 90, 242"  style="background:#bf5af2" title="紫水晶"></button>
+          <button class="swatch" data-val="255, 159, 10"  style="background:#ff9f0a" title="琥珀"></button>
+          <button class="swatch" data-val="255, 55, 95"   style="background:#ff375f" title="红石"></button>
+          <button class="swatch" data-val="100, 210, 255" style="background:#64d2ff" title="钻石"></button>
+        </div>
+      </div>
+
+      <div class="appearance-row">
+        <div class="appearance-label">背景效果</div>
+        <div class="seg-group" id="ap-bg">
+          <button class="seg" data-val="aurora">✨ 动态极光</button>
+          <button class="seg" data-val="static">🌌 静态光斑</button>
+          <button class="seg" data-val="plain">◻️ 纯净</button>
+        </div>
+      </div>
+
+      <div class="appearance-row" style="margin-bottom:6px">
+        <div class="appearance-label">界面密度</div>
+        <div class="seg-group" id="ap-density">
+          <button class="seg" data-val="comfortable">舒适</button>
+          <button class="seg" data-val="compact">紧凑</button>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="ap-reset">恢复默认</button>
+        <button class="btn btn-blue" id="ap-close">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast glass"></div>
+  <script src="app.js"></script>
+</body>
+</html>

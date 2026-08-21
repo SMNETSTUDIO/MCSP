@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 — MCSP</title>
+  <script>
+    (function () {
+      try {
+        var a = JSON.parse(localStorage.getItem('mcsp_appearance') || '{}');
+        var t = a.theme || 'dark';
+        if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = t;
+        document.documentElement.dataset.style = a.style || 'pixel';
+        document.documentElement.dataset.bg = a.bg || 'aurora';
+        if (a.accent) document.documentElement.style.setProperty('--acc-rgb', a.accent);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'><rect width='16' height='16' fill='%236d4b2d'/><rect width='16' height='5' fill='%2355a848'/><rect y='4' width='2' height='1' fill='%23478c3c'/><rect x='5' y='4' width='3' height='1' fill='%23478c3c'/><rect x='11' y='4' width='2' height='1' fill='%23478c3c'/><rect x='2' y='7' width='2' height='2' fill='%237a5533'/><rect x='9' y='6' width='2' height='2' fill='%237a5533'/><rect x='5' y='10' width='2' height='2' fill='%235c3e24'/><rect x='12' y='11' width='2' height='2' fill='%237a5533'/><rect x='1' y='12' width='2' height='2' fill='%235c3e24'/></svg>" />
+  <style>
+    /* ── login scene ── */
+    body { overflow: hidden; }
+    .login-scene {
+      height: 100vh;
+      display: grid;
+      place-items: center;
+    }
+    .login-stack {
+      display: flex; flex-direction: column; align-items: center;
+      animation: sceneIn 0.9s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+    }
+    @keyframes sceneIn {
+      from { opacity: 0; transform: translateY(26px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* ── signature: floating grass block ── */
+    .cube-stage {
+      width: 96px; height: 96px;
+      perspective: 560px;
+      margin-bottom: -6px;
+      animation: floaty 5.5s ease-in-out infinite;
+    }
+    @keyframes floaty {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-12px); }
+    }
+    .cube {
+      position: relative; width: 100%; height: 100%;
+      transform-style: preserve-3d;
+      animation: spin 14s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotateX(-24deg) rotateY(0deg); }
+      to   { transform: rotateX(-24deg) rotateY(360deg); }
+    }
+    .face {
+      position: absolute; inset: 0;
+      border: 1px solid rgba(0, 0, 0, 0.18);
+      image-rendering: pixelated;
+    }
+    /* grass top: 4-tone pixel checker, softer emerald */
+    .face.top {
+      transform: rotateX(90deg) translateZ(48px);
+      background:
+        conic-gradient(from 0deg at 50% 50%, #4ec46a 25%, #3da957 0 50%, #58d476 0 75%, #46b862 0),
+        #45bb63;
+      background-size: 24px 24px;
+      box-shadow: inset 0 0 22px rgba(255, 255, 255, 0.25);
+    }
+    .face.bottom {
+      transform: rotateX(-90deg) translateZ(48px);
+      background: conic-gradient(from 0deg at 50% 50%, #63452b 25%, #563b24 0 50%, #6e4d30 0 75%, #563b24 0);
+      background-size: 24px 24px;
+    }
+    /* dirt sides with ragged grass fringe */
+    .face.front  { transform: translateZ(48px); }
+    .face.back   { transform: rotateY(180deg) translateZ(48px); }
+    .face.left   { transform: rotateY(-90deg) translateZ(48px); }
+    .face.right  { transform: rotateY(90deg) translateZ(48px); }
+    .face.side {
+      background:
+        /* grass drips: alternating depths, drawn as pixel columns */
+        linear-gradient(to bottom, #3faf5c 0 14%, transparent 14%),
+        repeating-linear-gradient(to right,
+          transparent 0 12px, rgba(63, 175, 92, 0.9) 12px 24px, transparent 24px 36px,
+          rgba(63, 175, 92, 0.9) 36px 60px, transparent 60px 72px),
+        conic-gradient(from 0deg at 50% 50%, #6e4d30 25%, #5f4228 0 50%, #7c573a 0 75%, #634528 0);
+      background-size: 100% 100%, 100% 22%, 24px 24px;
+      background-repeat: no-repeat, no-repeat, repeat;
+      box-shadow: inset 0 6px 14px rgba(0, 0, 0, 0.22);
+    }
+    /* soft ground glow + contact shadow */
+    .cube-shadow {
+      width: 110px; height: 22px; margin: 18px auto 24px;
+      border-radius: 50%;
+      background:
+        radial-gradient(ellipse at center, rgba(48, 209, 88, 0.35), transparent 65%),
+        radial-gradient(ellipse at center, rgba(0, 0, 0, 0.6), transparent 70%);
+      filter: blur(1px);
+      animation: shadowPulse 5.5s ease-in-out infinite;
+    }
+    @keyframes shadowPulse {
+      0%, 100% { transform: scaleX(1); opacity: 0.95; }
+      50%      { transform: scaleX(0.76); opacity: 0.55; }
+    }
+
+    /* ── card ── */
+    .login-card {
+      width: min(400px, calc(100vw - 40px));
+      padding: 30px 36px 26px;
+      text-align: center;
+    }
+    .login-card h1 {
+      font-size: 27px; font-weight: 800; letter-spacing: 5px;
+      background: linear-gradient(180deg, #fff 30%, rgba(255, 255, 255, 0.6));
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .login-sub {
+      color: var(--text-dim); font-size: 13px; margin: 8px 0 28px;
+    }
+    .field {
+      display: flex; flex-direction: column; gap: 7px;
+      text-align: left; margin-bottom: 16px;
+    }
+    .field label { font-size: 12px; font-weight: 600; color: var(--text-dim); letter-spacing: 0.6px; }
+    .field input {
+      padding: 13px 16px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 13px; outline: none;
+      color: var(--text); font: inherit; font-size: 14.5px;
+      transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+    }
+    .field input:focus {
+      border-color: rgba(var(--acc-rgb), 0.6);
+      background: rgba(var(--acc-rgb), 0.07);
+      box-shadow: 0 0 0 4px rgba(var(--acc-rgb), 0.14);
+    }
+    .login-btn {
+      width: 100%; margin-top: 8px;
+      padding: 13px; font-size: 15px;
+    }
+    .login-error {
+      min-height: 20px; margin-top: 14px;
+      font-size: 12.5px; color: #ff9d96;
+      opacity: 0; transition: opacity 0.25s;
+    }
+    .login-error.show { opacity: 1; }
+    .login-hint {
+      margin-top: 18px; padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.09);
+      font-size: 11.5px; color: rgba(255, 255, 255, 0.35);
+    }
+    .login-hint code {
+      color: rgba(255, 255, 255, 0.55);
+      background: rgba(255, 255, 255, 0.07);
+      padding: 2px 7px; border-radius: 6px;
+      font-family: "SF Mono", ui-monospace, monospace;
+    }
+    .shake { animation: shake 0.45s; }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20% { transform: translateX(-9px); }
+      40% { transform: translateX(8px); }
+      60% { transform: translateX(-6px); }
+      80% { transform: translateX(4px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cube, .cube-stage, .cube-shadow, .login-stack { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+    <div class="blob b4"></div>
+    <div class="noise"></div>
+  </div>
+
+  <div class="login-scene">
+    <div class="login-stack">
+      <div class="cube-stage" aria-hidden="true">
+        <div class="cube">
+          <div class="face top"></div>
+          <div class="face bottom"></div>
+          <div class="face side front"></div>
+          <div class="face side back"></div>
+          <div class="face side left"></div>
+          <div class="face side right"></div>
+        </div>
+      </div>
+      <div class="cube-shadow" aria-hidden="true"></div>
+
+      <form class="login-card glass" id="login-form">
+        <h1>MCSP</h1>
+        <div class="login-sub">登录以管理你的 Minecraft 服务器</div>
+        <div class="field">
+          <label for="username">用户名</label>
+          <input id="username" name="username" autocomplete="username" autofocus required />
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <button class="btn btn-blue login-btn" type="submit" id="login-btn">登录</button>
+        <div class="login-error" id="login-error"></div>
+        <div id="oauth-area" hidden style="margin-top:14px;text-align:center">
+          <div class="dim" style="font-size:12px;margin-bottom:10px">— 或 —</div>
+          <button class="btn btn-ghost" type="button" id="oauth-btn" style="width:100%"></button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('login-form');
+    const errEl = document.getElementById('login-error');
+    const btn = document.getElementById('login-btn');
+
+    /* OAuth 第三方登录:已配置则显示入口;回调失败的原因经 ?oauth_error= 带回 */
+    const oauthErr = new URLSearchParams(location.search).get('oauth_error');
+    if (oauthErr) {
+      errEl.textContent = oauthErr;
+      errEl.classList.add('show');
+      history.replaceState(null, '', '/login');
+    }
+    fetch('/api/auth/oauth/status').then((r) => r.json()).then((s) => {
+      if (!s.enabled) return;
+      const area = document.getElementById('oauth-area');
+      const ob = document.getElementById('oauth-btn');
+      ob.textContent = `使用 ${s.name} 登录`;
+      ob.addEventListener('click', () => { location.href = '/api/auth/oauth/login'; });
+      area.hidden = false;
+    }).catch(() => {});
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      btn.disabled = true;
+      btn.textContent = '登录中…';
+      errEl.classList.remove('show');
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: form.username.value.trim(),
+            password: form.password.value,
+          }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          btn.textContent = '欢迎回来';
+          location.href = '/';
+          return;
+        }
+        throw new Error(data.error || '登录失败');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.add('show');
+        form.classList.remove('shake');
+        void form.offsetWidth; // restart animation
+        form.classList.add('shake');
+        btn.disabled = false;
+        btn.textContent = '登录';
+      }
+    });
+  </script>
+</body>
+</html>

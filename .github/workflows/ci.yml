@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Syntax check
+        run: |
+          node --check server.js
+          for f in src/*.js src/routes/*.js public/app.js scripts/smoke.js; do node --check "$f"; done
+
+      - name: Start panel
+        run: |
+          node server.js > server.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:3000/api/health && break
+            sleep 1
+          done
+
+      - name: Run smoke tests
+        run: node scripts/smoke.js
+
+      - name: Show server log on failure
+        if: failure()
+        run: cat server.log
