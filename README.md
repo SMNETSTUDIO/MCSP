@@ -7,7 +7,7 @@
 实例是**真实的** `java -jar` 子进程,10 种服务端**官方源**自动安装,
 内置**五种内网穿透**与 **authlib-injector 外置登录**,多租户资源配额管理。
 Instances are **real** `java -jar` child processes. 10 server types auto-installed from **official sources**,
-with **5 built-in tunnels**, **authlib-injector external auth**, and enforced multi-tenant quotas.
+with **5 built-in tunnels**, **authlib-injector external auth**, and multi-tenant resource quota management.
 
 [功能 Features](#-功能-features) · [快速开始 Quick Start](#-快速开始-quick-start) · [架构 Architecture](#-架构-architecture) · [验收 Acceptance](#-验收-acceptance) · [许可证 License](#-许可证-license)
 
