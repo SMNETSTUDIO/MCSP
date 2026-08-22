@@ -667,6 +667,36 @@ $('#view-plugins').addEventListener('change', async (e) => {
 
 /* ───────── file manager ───────── */
 
+/** 可解压的后缀,用于从压缩包名推出默认解压目录名 */
+const ARCHIVE_EXT_RE = /\.(zip|mrpack|tar\.gz|tgz|tar\.bz2|tbz2|tbz|tar\.xz|txz|tar)$/i;
+
+/** 打包/解压跑起来可能要几分钟,期间锁住工具栏,避免并发请求撞在同一目录上 */
+let fmWorking = false;
+
+function fmSelected() {
+  return $$('#fm-list [data-sel]:checked').map((c) => c.dataset.sel);
+}
+
+function fmSyncSelection() {
+  if (fmWorking) return;
+  const n = fmSelected().length;
+  $('#fm-selinfo').hidden = !n;
+  $('#fm-selinfo').textContent = `已选 ${n} 项`;
+  $('#fm-zip').hidden = !n;
+  $('#fm-targz').hidden = !n;
+}
+
+function fmBusy(on, text) {
+  fmWorking = on;
+  $$('#view-files .files-toolbar .icon-btn').forEach((b) => { b.disabled = on; });
+  if (on) {
+    $('#fm-selinfo').hidden = false;
+    $('#fm-selinfo').textContent = text;
+  } else {
+    fmSyncSelection();
+  }
+}
+
 async function loadFiles(p) {
   const d = await iapi(`/files?path=${encodeURIComponent(p)}`);
   if (!d.ok) { toast(d.error, true); return; }
@@ -685,22 +715,27 @@ async function loadFiles(p) {
 
   const rows = d.entries.map((e2) => {
     const full = (p === '/' ? '' : p) + '/' + e2.name;
-    const ico = e2.type === 'dir' ? '📁' : e2.binary ? '📦' : '📄';
+    const ico = e2.type === 'dir' ? '📁' : e2.archive ? '🗜' : e2.binary ? '📦' : '📄';
     const clickable = e2.type === 'dir' || !e2.binary;
+    const name = escapeHtml(e2.name);
     return `
-      <div class="file-row ${clickable ? 'clickable' : ''}" data-type="${e2.type}" data-binary="${e2.binary}" data-name="${escapeHtml(e2.name)}" data-path="${escapeHtml(full)}">
+      <div class="file-row ${clickable ? 'clickable' : ''}" data-type="${e2.type}" data-binary="${e2.binary}" data-name="${name}" data-path="${escapeHtml(full)}">
+        <div class="f-check"><input type="checkbox" data-sel="${name}" title="选中以打包"></div>
         <div class="f-ico">${ico}</div>
-        <div class="f-name">${escapeHtml(e2.name)}</div>
+        <div class="f-name">${name}</div>
         <div class="f-size">${e2.type === 'dir' ? '—' : fmtSize(e2.size)}</div>
         <div class="f-time">${fmtAgo(e2.mtime)}</div>
         <div class="f-actions">
+          ${e2.archive ? `<button class="icon-btn gold" data-fext="${escapeHtml(full)}" data-fname="${name}">解压</button>` : ''}
           <button class="icon-btn" data-fdl="${escapeHtml(full)}" data-fdir="${e2.type === 'dir'}"
             ${e2.type === 'dir' ? 'title="打包成 tar.gz 下载"' : ''}>下载</button>
+          <button class="icon-btn" data-fren="${escapeHtml(full)}" data-fname="${name}">改名</button>
           <button class="icon-btn danger" data-fdel="${escapeHtml(full)}">删除</button>
         </div>
       </div>`;
   }).join('');
   $('#fm-list').innerHTML = rows || '<div class="empty">空目录</div>';
+  fmSyncSelection();                       // 换目录后勾选作废,顺手把工具栏收回去
 }
 
 $('#fm-crumb').addEventListener('click', (e) => {
@@ -708,7 +743,27 @@ $('#fm-crumb').addEventListener('click', (e) => {
   if (b) loadFiles(b.dataset.goto);
 });
 
+$('#fm-list').addEventListener('change', (e) => {
+  if (e.target.matches('[data-sel]')) fmSyncSelection();
+});
+
 $('#fm-list').addEventListener('click', async (e) => {
+  // 勾选框自己处理选中,别顺带把文件也打开了
+  if (e.target.closest('.f-check')) return;
+  if (fmWorking) return toast('压缩任务进行中,请稍候', true);
+
+  const ext = e.target.closest('[data-fext]');
+  if (ext) return fmExtract(ext.dataset.fext, ext.dataset.fname);
+
+  const ren = e.target.closest('[data-fren]');
+  if (ren) {
+    const name = prompt('新名称:', ren.dataset.fname);
+    if (!name || name === ren.dataset.fname) return;
+    const r = await iapi('/files/rename', { method: 'POST', body: { path: ren.dataset.fren, name } });
+    r.ok ? loadFiles(fmPath) : toast(r.error, true);
+    return;
+  }
+
   const dl = e.target.closest('[data-fdl]');
   if (dl) {
     // 和备份下载同理:交给浏览器,不走 fetch 攒 blob
@@ -763,6 +818,42 @@ $('#fm-newdir').addEventListener('click', async () => {
   const r = await iapi('/files/create', { method: 'POST', body: { dir: fmPath, name, type: 'dir' } });
   r.ok ? loadFiles(fmPath) : toast(r.error, true);
 });
+
+/* ── 压缩包:解压 / 打包 ── */
+
+async function fmExtract(rel, name) {
+  // 默认解到同名新文件夹:整合包动辄几百个文件,直接摊在当前目录很难收拾
+  const stem = name.replace(ARCHIVE_EXT_RE, '') || name;
+  const sub = prompt(`解压 ${name} 到子文件夹(留空 = 直接解到当前目录):`, stem);
+  if (sub === null) return;
+  const folder = sub.trim();
+  const dest = folder ? (fmPath === '/' ? '' : fmPath) + '/' + folder : fmPath;
+
+  fmBusy(true, '正在解压…');
+  const r = await iapi('/files/extract', { method: 'POST', body: { path: rel, dest } });
+  fmBusy(false);
+  if (!r.ok) return toast(r.error, true);
+  toast(`已解压 ${r.files} 个文件(${fmtSize(r.bytes)})`);
+  loadFiles(fmPath);
+}
+
+async function fmArchive(format) {
+  const names = fmSelected();
+  if (!names.length) return toast('请先勾选要打包的文件', true);
+  const def = names.length === 1 ? names[0].replace(/\.[^.]+$/, '') : 'archive';
+  const stem = prompt(`把选中的 ${names.length} 项打包成 ${format},压缩包名称:`, def);
+  if (!stem || !stem.trim()) return;
+
+  fmBusy(true, '正在打包…');
+  const r = await iapi('/files/archive', { method: 'POST', body: { dir: fmPath, names, name: stem.trim(), format } });
+  fmBusy(false);
+  if (!r.ok) return toast(r.error, true);
+  toast(`已生成 ${r.name}(${r.files} 个文件,${fmtSize(r.size)})`);
+  loadFiles(fmPath);
+}
+
+$('#fm-zip').addEventListener('click', () => fmArchive('zip'));
+$('#fm-targz').addEventListener('click', () => fmArchive('tar.gz'));
 
 /* ── 上传:XHR(要 upload.progress,fetch 给不了)· body 就是文件本身 ── */
 

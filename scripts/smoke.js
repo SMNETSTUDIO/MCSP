@@ -30,8 +30,53 @@ function check(name, cond, detail = '') {
   else { failed++; console.error(`  ✘ ${name} ${detail}`); }
 }
 
+/**
+ * 压缩模块的本地往返:不碰面板数据,在临时目录里打包再解回来比对。
+ * zip 是我们自己按格式写的,不跑一遍很难发现头字段错位。
+ */
+async function archiveRoundtrip() {
+  const fsp = require('fs/promises');
+  const path = require('path');
+  const os = require('os');
+  const crypto = require('crypto');
+  const { archiveKind, createArchive, extractArchive } = require('../src/archive');
+
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcsp-smoke-'));
+  try {
+    const src = path.join(root, 'src');
+    await fsp.mkdir(path.join(src, '世界/region'), { recursive: true });
+    const blob = crypto.randomBytes(200000);                 // 不可压缩,走 deflate 的存储块分支
+    await fsp.writeFile(path.join(src, '世界/region/r.0.0.mca'), blob);
+    await fsp.writeFile(path.join(src, '世界/level.dat'), 'x'.repeat(30000));
+    await fsp.writeFile(path.join(src, 'empty'), '');
+
+    for (const format of ['zip', 'tar.gz']) {
+      const out = path.join(root, 'a.' + format);
+      const made = await createArchive(out, src, ['世界', 'empty'], format);
+      check(`${format} pack`, made.files === 3, JSON.stringify(made));
+      check(`${format} detected`, archiveKind(out) === (format === 'zip' ? 'zip' : 'tar'));
+
+      const back = path.join(root, 'back-' + format);
+      const got = await extractArchive(out, back, 1073741824);
+      check(`${format} unpack`, got.files === 3, JSON.stringify(got));
+      check(`${format} content intact`, Buffer.compare(await fsp.readFile(path.join(back, '世界/region/r.0.0.mca')), blob) === 0);
+      check(`${format} empty file intact`, (await fsp.stat(path.join(back, 'empty'))).size === 0);
+    }
+
+    // zip bomb 闸门:体积上限必须在落盘前就拦下来
+    let capped = false;
+    try { await extractArchive(path.join(root, 'a.zip'), path.join(root, 'nope'), 1024); }
+    catch (e) { capped = /上限/.test(e.message); }
+    check('extract size cap', capped);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   console.log(`smoke → ${BASE}`);
+
+  await archiveRoundtrip();
 
   // 健康检查(免鉴权)
   let r = await req('GET', '/api/health');
@@ -96,6 +141,21 @@ function check(name, cond, detail = '') {
 
     r = await req('GET', `/api/instances/${iid}/files/download?path=/`);
     check('download instance root rejected', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/rename`, { path: '/server.properties', name: '../pwn' });
+    check('rename name sandbox', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/extract`, { path: '/../../etc/x.zip' });
+    check('extract source sandbox', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/extract`, { path: '/server.properties' });
+    check('extract rejects non-archive', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/archive`, { dir: '/', names: ['../../etc'], format: 'zip' });
+    check('archive name sandbox', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/archive`, { dir: '/', names: [], format: 'zip' });
+    check('archive empty selection rejected', r.status === 400);
 
     r = await req('GET', `/api/instances/${iid}/properties`);
     check('properties', r.status === 200 && typeof r.json === 'object');

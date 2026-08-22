@@ -9,7 +9,9 @@ services:
       - "25565:25565"      # Minecraft 实例(多实例时按需追加映射)
     environment:
       - PORT=3000
-      # - JAVA_BIN=/path/to/java   # 一般无需设置:面板内可一键安装 Temurin 到 bin/java
+      # - JAVA_BIN=/path/to/java        # 一般无需设置:面板内可一键安装 Temurin 到 bin/java
+      # - MCSP_MAX_UPLOAD_MB=2048       # 单个上传文件上限
+      # - MCSP_MAX_EXTRACT_MB=8192      # 解压后总体积上限(防 zip bomb 占满磁盘)
     volumes:
       - mcsp-data:/app/data            # 账户 / 会话 / 注册表 / 计划任务
       - mcsp-instances:/app/instances  # 服务端实例(世界存档)

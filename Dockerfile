@@ -3,13 +3,14 @@
 FROM node:22-slim
 
 # 运行期外部依赖:
-#   tar/gzip        备份与穿透组件解包
+#   tar/gzip        备份、穿透组件解包、文件管理器的 tar 家族打包/解压
+#   bzip2/xz-utils  让 tar 认得 .tar.bz2 / .tar.xz(zip 是面板自己用 zlib 读写,不需要 unzip)
 #   openssh-client  Pinggy / Serveo SSH 隧道(含 ssh-keygen)
 #   util-linux      taskset(普通用户 CPU 配额绑核)
 #   curl + ca-certificates  健康检查与官方源下载
 #   procps          /proc 指标读取辅助
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      tar gzip openssh-client util-linux curl ca-certificates procps \
+      tar gzip bzip2 xz-utils openssh-client util-linux curl ca-certificates procps \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

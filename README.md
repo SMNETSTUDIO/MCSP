@@ -35,7 +35,8 @@ from that process. No Java pre-install, no public IP required.
 | ❯_ 控制台 = 真实 stdout 流(SSE)+ stdin 命令(↑↓ 历史);玩家/封禁/白名单/OP 均为真实数据 | Console = real stdout stream (SSE) + stdin commands; players/bans/whitelist/OP are real server data |
 | ⇄ 六种内网穿透:**bore / playit.gg / Pinggy / Serveo / ngrok / frpc**,每实例独立隧道、公网地址自动解析;frpc 支持 **frps-panel** 多用户鉴权(user + metadatas.token) | 6 tunnels: **bore / playit.gg / Pinggy / Serveo / ngrok / frpc**, one tunnel per instance with auto-parsed public address; frpc supports **frps-panel** auth (user + metadatas.token) |
 | 📊 指标采样自 `/proc/<pid>`:真实 CPU% / RSS 内存实时曲线 | Metrics sampled from `/proc/<pid>`: real CPU% / RSS with live charts |
-| 🗀 文件管理器(路径沙箱):在线编辑 + **拖拽/多选上传**(实时进度条)+ **文件下载 / 目录打包 tar.gz 下载**、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager: online editing + **drag-and-drop / multi-file upload** with live progress + **file download / folder download as tar.gz**, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
+| 🗀 文件管理器(路径沙箱):在线编辑 + **拖拽/多选上传**(实时进度条)+ **文件下载 / 目录打包 tar.gz 下载** + 重命名、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager: online editing + **drag-and-drop / multi-file upload** with live progress + **file download / folder download as tar.gz** + rename, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
+| 🗜 **压缩包**:勾选任意文件/目录打包成 **zip / tar.gz**,整合包与世界包一键**解压**(zip / mrpack / tar / tar.gz / tar.bz2 / tar.xz)。zip 由面板用 zlib 自己读写(不装 unzip 也能用,认 GBK 文件名与 zip64),解压前先拦截 `..`、软链、加密包与 zip bomb | 🗜 **Archives**: pack any selection into **zip / tar.gz**, one-click **extract** for modpacks & world packs (zip / mrpack / tar / tar.gz / tar.bz2 / tar.xz). ZIP is read/written in-process with zlib — no `unzip` needed, handles GBK names and zip64 — and every archive is screened for `..`, symlinks, encryption and zip bombs before a single byte lands |
 | ⧉ 真实 `tar.gz` 备份/恢复/**下载**,备份前自动 `save-all` | Real `tar.gz` backup / restore / **download**, with automatic `save-all` |
 | ◉ 多租户:普通用户实例**隔离**,配额真实生效——实例数 / 内存(-Xmx 之和)/ CPU 核(taskset 绑核) | Multi-tenant: isolated user instances with enforced quotas — instance count / memory (Σ-Xmx) / CPU cores (taskset pinning) |
 | 🎨 双主题:像素风(Minecraft GUI 质感)/ Apple 液态玻璃;深浅色、6 主题色、密度可调 | Two themes: pixel (Minecraft GUI) / Apple liquid glass; dark/light, 6 accent colors, density options |
@@ -103,6 +104,7 @@ npm run pm2                  # 或 PM2 常驻 or run under PM2
 src/
   app.js 装配 · auth.js 认证 · oauth.js OAuth2 · instance.js 核心领域对象
   registry.js 注册表 · tasks.js 调度 · backups.js 备份 · tunnels.js 穿透组件 · authlib.js 外置登录
+  archive.js 压缩包(zip 自读写 / tar 调系统 tar)
   routes/  users / host / tunnel / instances
 public/    原生 JS 前端,零依赖 vanilla JS frontend, zero deps
 ```
@@ -118,19 +120,19 @@ server.js              入口 entry (10 lines)
 src/                   后端分层模块 backend modules
 public/                前端 frontend(vanilla JS)
 scripts/deploy.sh      一键部署 one-click deploy
-scripts/smoke.js       npm test — 26 项真实 API 冒烟回归 real-API smoke suite
+scripts/smoke.js       npm test — 42 项冒烟回归 smoke suite(压缩模块往返 + 实例级用例)
 instances/<id>/        每实例一个真实服务端目录 real server dir per instance
 backups/<id>/*.tar.gz  真实备份 real backups
 data/                  users / sessions / instances / tasks(持久化 persisted)
-Dockerfile             容器镜像 container image(node:22-slim + tar/ssh/taskset)
+Dockerfile             容器镜像 container image(node:22-slim + tar/bzip2/xz/ssh/taskset)
 ecosystem.config.js    PM2 配置 PM2 config(fork + JAVA_BIN)
 ```
 
 ## ✅ 验收 Acceptance
 
 ```bash
-npm test          # scripts/smoke.js — 对运行中的面板做 26 项真实 API 回归
-                  # 26 real-API regression checks against a running panel
+npm test          # scripts/smoke.js — 压缩模块本地往返 + 对运行中的面板做真实 API 回归
+                  # archive round-trip + real-API regression checks against a running panel
 ```
 
 CI 在每次 push 时启动面板并跑完整冒烟;Docker 镜像由 Actions 构建并推送 GHCR。

@@ -18,6 +18,7 @@ server.js(入口,10 行)
         ├─ src/instance.js    Instance 类(核心领域对象,见下)
         ├─ src/tasks.js       计划任务存储 + 30s 调度器
         ├─ src/backups.js     tar.gz 备份/恢复
+        ├─ src/archive.js     压缩包:zip 用 zlib 自读写,tar 家族调系统 tar(均先做安全校验)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -75,6 +76,14 @@ server.js(入口,10 行)
   客户端断开即 SIGKILL 掉 tar);实例根目录不给下载,那是「备份」的活(会先 save-all)
 - 备份 id 必须匹配 `^[\w.-]+\.tar\.gz$` —— Express 会解码 `:id`,不校验的话 `..%2F` 能带着
   `path.join` 走出 `backups/`(download/restore/delete 三处共用该校验)
+- 解压(src/archive.js)把压缩包当**不可信输入**,落盘前整包体检:条目名含 `..` 拒绝、
+  绝对路径夹回 dest 内(落地路径再校验一次)、**符号链接条目一律拒绝**、加密包拒绝、
+  解压后总体积超 `MCSP_MAX_EXTRACT_MB`(默认 8192)拒绝。
+  软链这条不能省:GNU tar 自己会挡 `..`,却挡不住「先解出 `esc -> /`,下次再往 `esc/` 里写」
+  这种跨两次操作的逃逸 —— 多租户下那就是越过了实例隔离。
+  tar 家族先 `tar -tvf` 列一遍清单做校验再 `-xf`(多一趟解压,换确定性);
+  zip 是面板用 zlib 自己读写的,不依赖 `unzip`,顺带认 zip64 和没有 UTF-8 标志位的 GBK 文件名。
+  同一实例的打包/解压串行(`archiveBusy`),打包先写 `.mcsp-archive-*` 再 rename
 - 登录限速(5 次失败锁 1 分钟);隧道配置输入全部白名单化清洗
 - 全局错误中间件 + `asyncHandler`:异步路由抛错返回 500 JSON,不打崩进程
 
@@ -86,5 +95,6 @@ PM2 **fork 模式**(见 ecosystem.config.js)。面板是有状态进程(会话�
 
 ## 测试
 
-`npm test`(scripts/smoke.js)对运行中的面板做 26 项真实 API 回归:
-健康检查、鉴权边界(401/403/404)、路径沙箱、实例全部子资源读取。
+`npm test`(scripts/smoke.js)先在临时目录跑一遍压缩模块往返(打包 → 解压 → 逐字节比对 →
+体积上限),再对运行中的面板做真实 API 回归:健康检查、鉴权边界(401/403/404)、
+路径沙箱(上传/下载/解压/打包/重命名)、实例全部子资源读取。

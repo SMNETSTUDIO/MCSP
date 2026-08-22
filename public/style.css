@@ -445,6 +445,8 @@ body {
 .icon-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
 .icon-btn.danger:hover { background: rgba(255, 69, 58, 0.35); border-color: rgba(255, 69, 58, 0.5); }
 .icon-btn.gold { color: #ffd60a; }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.icon-btn:disabled:hover { color: var(--text-dim); background: rgba(255, 255, 255, 0.06); }
 
 .tag-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 34px; }
 .tag {
@@ -769,7 +771,7 @@ body {
 
 .file-table { display: flex; flex-direction: column; }
 .file-row {
-  display: grid; grid-template-columns: 26px 1fr 110px 130px auto;
+  display: grid; grid-template-columns: 20px 26px 1fr 100px 120px auto;
   align-items: center; gap: 10px;
   padding: 9px 12px; border-radius: 11px;
   font-size: 13px; cursor: default;
@@ -777,6 +779,8 @@ body {
 }
 .file-row:hover { background: rgba(255, 255, 255, 0.06); }
 .file-row.clickable { cursor: pointer; }
+.file-row .f-check { display: flex; align-items: center; justify-content: center; }
+.file-row .f-check input { accent-color: var(--blue); cursor: pointer; margin: 0; }
 .file-row .f-ico { font-size: 15px; text-align: center; }
 .file-row .f-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .file-row .f-size, .file-row .f-time { color: var(--text-dim); font-size: 12px; }
@@ -1274,4 +1278,8 @@ body {
   .sidebar-footer { margin-top: 0; flex-shrink: 0; }
   .side-status { display: none; }
   .world-grid { grid-template-columns: 1fr; }
+  /* 窄屏放不下四个操作按钮:把修改时间让出来,操作换行铺在名字下面 */
+  .file-row { grid-template-columns: 20px 26px 1fr auto; }
+  .file-row .f-time { display: none; }
+  .file-row .f-actions { grid-column: 1 / -1; flex-wrap: wrap; justify-self: start; }
 }

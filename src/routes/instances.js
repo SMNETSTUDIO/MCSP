@@ -5,8 +5,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const express = require('express');
-const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB } = require('../config');
+const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB } = require('../config');
 const { asyncHandler, dirSize } = require('../utils');
+const { archiveKind, extractArchive, createArchive } = require('../archive');
 const { users: authUsers } = require('../auth');
 const { Instance } = require('../instance');
 const { instances, saveRegistry, installInstance } = require('../registry');
@@ -373,6 +374,7 @@ router.get('/:iid/files', asyncHandler(async (req, res) => {
       type: e.isDirectory() ? 'dir' : 'file',
       size: st.size,
       binary: !e.isDirectory() && (!isText || st.size > 2 * 1048576),
+      archive: !e.isDirectory() && !!archiveKind(e.name),
       mtime: st.mtimeMs,
     });
   }
@@ -515,6 +517,111 @@ router.delete('/:iid/files', asyncHandler(async (req, res) => {
   await fsp.rm(p, { recursive: true, force: true });
   req.inst.log('INFO', `[MCSP] 已删除: ${req.query.path}`);
   res.json({ ok: true });
+}));
+
+/* 重命名 / 同目录内改名(跨目录移动请用剪切板式操作,这里只改最后一段) */
+router.post('/:iid/files/rename', asyncHandler(async (req, res) => {
+  const { path: rel, name } = req.body || {};
+  if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '名称非法' });
+  const src = safePath(req.inst, rel);
+  if (!src || src === req.inst.dir) return res.status(400).json({ ok: false, error: '非法路径' });
+  if (!fs.existsSync(src)) return res.status(404).json({ ok: false, error: '文件不存在' });
+  const dest = path.join(path.dirname(src), name);
+  if (dest === src) return res.json({ ok: true });
+  if (fs.existsSync(dest)) return res.status(409).json({ ok: false, error: '同名文件已存在' });
+  await fsp.rename(src, dest);
+  req.inst.log('INFO', `[MCSP] 已重命名: ${rel} → ${name}`);
+  if (path.basename(src) === 'server.properties' || name === 'server.properties') req.inst.invalidatePropsCache();
+  res.json({ ok: true });
+}));
+
+/* ── 压缩包:解压 / 打包 ── */
+
+/* 解压和打包都可能跑几分钟,同一实例只允许一个在跑:
+   否则用户手抖点两下,两个 tar 会往同一个目录里对着写 */
+const archiveBusy = new Set();
+
+/** 解压 { path: 压缩包, dest: 目标目录(可不存在) } */
+router.post('/:iid/files/extract', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { path: rel, dest: destRel } = req.body || {};
+  const src = safePath(inst, rel);
+  if (!src) return res.status(400).json({ ok: false, error: '非法路径' });
+  if (!archiveKind(src)) {
+    return res.status(400).json({ ok: false, error: '不支持的格式,可解压 zip / mrpack / tar / tar.gz / tar.bz2 / tar.xz' });
+  }
+  let st;
+  try { st = await fsp.stat(src); } catch { return res.status(404).json({ ok: false, error: '压缩包不存在' }); }
+  if (!st.isFile()) return res.status(400).json({ ok: false, error: '不是文件' });
+
+  const dest = safePath(inst, destRel || path.posix.dirname(String(rel)));
+  if (!dest) return res.status(400).json({ ok: false, error: '非法的解压目标路径' });
+  if (fs.existsSync(dest) && !fs.statSync(dest).isDirectory()) {
+    return res.status(409).json({ ok: false, error: '解压目标已存在同名文件' });
+  }
+
+  if (archiveBusy.has(inst.id)) return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
+  archiveBusy.add(inst.id);
+  const shown = destRel || path.posix.dirname(String(rel));
+  inst.log('INFO', `[MCSP] 开始解压 ${rel} → ${shown}`);
+  try {
+    await fsp.mkdir(dest, { recursive: true });
+    const r = await extractArchive(src, dest, MAX_EXTRACT_MB * 1048576);
+    inst.log('INFO', `[MCSP] 解压完成: ${rel} → ${shown} (${r.files} 个文件, ${(r.bytes / 1048576).toFixed(1)} MB)`);
+    inst.invalidatePropsCache();      // 整合包/世界包里常带 server.properties
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    inst.log('ERROR', `[MCSP] 解压失败: ${rel} — ${err.message}`);
+    res.status(400).json({ ok: false, error: err.message });
+  } finally {
+    archiveBusy.delete(inst.id);
+  }
+}));
+
+/** 打包 { dir: 所在目录, names: [单段名], name: 输出名, format: zip|tar.gz } */
+router.post('/:iid/files/archive', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { dir, names, name, format } = req.body || {};
+  const fmt = format === 'tar.gz' ? 'tar.gz' : 'zip';
+
+  const parent = safePath(inst, dir);
+  if (!parent) return res.status(400).json({ ok: false, error: '非法路径' });
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+    return res.status(404).json({ ok: false, error: '目录不存在' });
+  }
+  if (!Array.isArray(names) || !names.length) return res.status(400).json({ ok: false, error: '未选择要打包的内容' });
+  if (names.length > 2000) return res.status(400).json({ ok: false, error: '一次最多打包 2000 项' });
+  for (const n of names) {
+    if (!isSafeName(n)) return res.status(400).json({ ok: false, error: `名称非法: ${n}` });
+    if (!fs.existsSync(path.join(parent, n))) return res.status(404).json({ ok: false, error: `不存在: ${n}` });
+  }
+
+  // 输出名:去掉用户可能已经带上的后缀,统一按所选格式补回去
+  const stem = String(name || (names.length === 1 ? names[0] : 'archive'))
+    .trim().replace(/\.(zip|tar\.gz|tgz|tar)$/i, '').slice(0, 200);
+  const outName = stem + '.' + fmt;
+  if (!isSafeName(outName)) return res.status(400).json({ ok: false, error: '压缩包名称非法' });
+  const out = path.join(parent, outName);
+  if (fs.existsSync(out)) return res.status(409).json({ ok: false, error: `${outName} 已存在` });
+
+  if (archiveBusy.has(inst.id)) return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
+  archiveBusy.add(inst.id);
+  // 先写到临时名再改回来:打包途中它不会被 tar 自己扫进去,中断也不会留下半个能点开的包
+  const tmp = path.join(parent, `.mcsp-archive-${crypto.randomUUID().slice(0, 8)}`);
+  inst.log('INFO', `[MCSP] 开始打包 ${names.length} 项 → ${outName}`);
+  try {
+    const r = await createArchive(tmp, parent, names, fmt);
+    await fsp.rename(tmp, out);
+    const size = (await fsp.stat(out)).size;
+    inst.log('INFO', `[MCSP] 打包完成: ${outName} (${r.files} 个文件, ${(size / 1048576).toFixed(1)} MB)`);
+    res.json({ ok: true, name: outName, files: r.files, size });
+  } catch (err) {
+    await fsp.rm(tmp, { force: true });
+    inst.log('ERROR', `[MCSP] 打包失败: ${outName} — ${err.message}`);
+    res.status(400).json({ ok: false, error: err.message });
+  } finally {
+    archiveBusy.delete(inst.id);
+  }
 }));
 
 /* ── 计划任务 ── */
