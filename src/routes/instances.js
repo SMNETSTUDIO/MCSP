@@ -3,8 +3,9 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const express = require('express');
-const { DATA_DIR, BACKUPS_DIR } = require('../config');
+const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB } = require('../config');
 const { asyncHandler, dirSize } = require('../utils');
 const { users: authUsers } = require('../auth');
 const { Instance } = require('../instance');
@@ -27,6 +28,42 @@ function safePath(inst, rel) {
 }
 
 const TEXT_EXT = new Set(['.txt', '.properties', '.yml', '.yaml', '.json', '.json5', '.toml', '.conf', '.cfg', '.ini', '.log', '.sh', '.md', '.mcmeta', '.snbt']);
+
+/** 单段文件名校验:不允许分隔符、`.`/`..`,以及 NUL 等控制字符 */
+const isSafeName = (name) =>
+  !!name && name.length <= 255 && !/[/\\]/.test(name) && !/[\x00-\x1f]/.test(name) && name !== '.' && name !== '..';
+
+/* 备份 id 必须是单段 tar.gz 文件名 —— :id 会被 Express 解码,
+   不校验的话 `..%2F..%2F` 能带着 path.join 走出 backups/ 目录 */
+const isBackupId = (id) => /^[\w.-]+\.tar\.gz$/.test(id);
+
+/**
+ * 把请求体原样落到 dest(不引 multipart 依赖:前端一次传一个文件,
+ * body 就是文件本身)。超过 max 字节立即掐断,返回已写入字节数。
+ */
+function receiveUpload(req, dest, max) {
+  return new Promise((resolve, reject) => {
+    const ws = fs.createWriteStream(dest);
+    let received = 0;
+    let failed = null;
+    const fail = (err) => {
+      if (failed) return;
+      failed = err;
+      req.unpipe(ws);
+      ws.destroy();
+      reject(err);
+    };
+    req.on('data', (chunk) => {
+      received += chunk.length;
+      if (received > max) fail(Object.assign(new Error('文件超过上传大小上限'), { tooLarge: true }));
+    });
+    req.on('aborted', () => fail(new Error('上传中断')));
+    req.on('error', fail);
+    ws.on('error', fail);
+    ws.on('finish', () => { if (!failed) resolve(received); });
+    req.pipe(ws);
+  });
+}
 
 /* :iid 统一解析;非管理员只能访问自己的实例(404 不泄露存在性) */
 router.param('iid', (req, res, next, iid) => {
@@ -278,13 +315,26 @@ router.post('/:iid/backups', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:iid/backups/:id/restore', asyncHandler(async (req, res) => {
+  if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
   if (req.inst.state !== 'stopped') return res.json({ ok: false, error: '请先停止实例再恢复备份' });
   res.json(await restoreBackup(req.inst, req.params.id));
 }));
 
+/* 下载备份:直接流式回传 tar.gz(Express 处理 Range / ETag) */
+router.get('/:iid/backups/:id/download', (req, res) => {
+  const id = req.params.id;
+  if (!isBackupId(id)) return res.status(404).json({ ok: false, error: '备份不存在' });
+  const file = path.join(backupDir(req.inst), id);
+  if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '备份不存在' });
+  res.download(file, id, (err) => {
+    if (err && !res.headersSent) res.status(500).json({ ok: false, error: '下载失败' });
+  });
+});
+
 router.delete('/:iid/backups/:id', (req, res) => {
+  if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
   const file = path.join(backupDir(req.inst), req.params.id);
-  if (!fs.existsSync(file) || !req.params.id.endsWith('.tar.gz')) return res.status(404).json({ ok: false, error: '备份不存在' });
+  if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '备份不存在' });
   fs.unlinkSync(file);
   req.inst.log('INFO', `[MCSP] 已删除备份 ${req.params.id}`);
   res.json({ ok: true });
@@ -344,6 +394,51 @@ router.get('/:iid/files/content', asyncHandler(async (req, res) => {
   }
 }));
 
+/* 下载:文件原样回传,目录现打包成 tar.gz 流式回传(不落盘) */
+router.get('/:iid/files/download', asyncHandler(async (req, res) => {
+  const p = safePath(req.inst, req.query.path);
+  if (!p) return res.status(400).json({ ok: false, error: '非法路径' });
+  // 整个实例目录交给备份功能:那条路会先 save-all 再打包,这里不重复实现
+  if (p === req.inst.dir) return res.status(400).json({ ok: false, error: '整个实例请用「备份」页打包下载' });
+
+  let st;
+  try { st = await fsp.stat(p); } catch { return res.status(404).json({ ok: false, error: '文件不存在' }); }
+
+  if (st.isFile()) {
+    return res.download(p, path.basename(p), (err) => {
+      if (err && !res.headersSent) res.status(500).json({ ok: false, error: '下载失败' });
+    });
+  }
+  if (!st.isDirectory()) return res.status(400).json({ ok: false, error: '不支持的文件类型' });
+
+  const base = path.basename(p);
+  const archive = base + '.tar.gz';
+  // 流式输出没有 Content-Length,文件名同时给 ASCII 兜底和 UTF-8 版本(世界目录常是中文)。
+  // 纯中文名清洗完只剩下划线,那还不如给个能看的默认名。
+  const ascii = (base.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '') || 'folder') + '.tar.gz';
+  res.setHeader('Content-Type', 'application/gzip');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(archive)}`);
+
+  const tar = spawn('tar', ['czf', '-', '-C', path.dirname(p), base]);
+  let stderr = '';
+  tar.stderr.on('data', (d) => { stderr += d.toString().slice(0, 500); });
+  tar.on('error', (err) => {
+    req.inst.log('ERROR', `[MCSP] 打包下载失败: ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ ok: false, error: `打包失败: ${err.message}` });
+    else res.destroy();
+  });
+  tar.on('exit', (code) => {
+    if (code === 0) return;
+    // 头已经发出去了,只能断流让浏览器把这次下载判为失败
+    req.inst.log('ERROR', `[MCSP] 打包下载失败 (tar exit ${code}) ${stderr.trim()}`);
+    res.destroy();
+  });
+  // 客户端中途取消就别继续压缩了,否则一个大世界会白烧几分钟 CPU
+  res.on('close', () => { if (tar.exitCode === null) tar.kill('SIGKILL'); });
+  tar.stdout.pipe(res);
+}));
+
 router.put('/:iid/files/content', asyncHandler(async (req, res) => {
   const { path: rel, content } = req.body || {};
   const p = safePath(req.inst, rel);
@@ -365,6 +460,53 @@ router.post('/:iid/files/create', asyncHandler(async (req, res) => {
   if (type === 'dir') await fsp.mkdir(p, { recursive: true });
   else await fsp.writeFile(p, '');
   res.json({ ok: true });
+}));
+
+/* 上传:body = 文件原始字节,目标目录与文件名走 query;同名需显式 overwrite */
+router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
+  const name = String(req.query.name || '');
+  if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '文件名非法' });
+
+  const parent = safePath(req.inst, req.query.path);
+  if (!parent) return res.status(400).json({ ok: false, error: '非法路径' });
+  let pst;
+  try { pst = await fsp.stat(parent); } catch { return res.status(404).json({ ok: false, error: '目录不存在' }); }
+  if (!pst.isDirectory()) return res.status(400).json({ ok: false, error: '目标不是目录' });
+
+  const dest = path.join(parent, name);
+  const overwrite = req.query.overwrite === '1';
+  if (fs.existsSync(dest)) {
+    if (!overwrite) return res.status(409).json({ ok: false, error: '同名文件已存在' });
+    if (fs.statSync(dest).isDirectory()) return res.status(409).json({ ok: false, error: '同名目录已存在' });
+  }
+
+  const max = MAX_UPLOAD_MB * 1048576;
+  const declared = parseInt(req.headers['content-length'], 10);
+  if (Number.isFinite(declared) && declared > max) {
+    return res.status(413).json({ ok: false, error: `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
+  }
+
+  // 先写临时文件再 rename:上传中断不会在目录里留下半截的同名文件
+  const tmp = path.join(parent, `.mcsp-upload-${crypto.randomUUID().slice(0, 8)}`);
+  let size;
+  try {
+    size = await receiveUpload(req, tmp, max);
+  } catch (err) {
+    await fsp.rm(tmp, { force: true });
+    if (err.tooLarge) {
+      // 响应发出后直接断连:剩下的字节可能还有好几 GB,没必要收完再丢
+      res.on('finish', () => req.destroy());
+      return res.status(413).json({ ok: false, error: `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
+    }
+    if (res.headersSent || req.destroyed) return;   // 客户端自己断的,没人在等这个响应
+    return res.status(400).json({ ok: false, error: `上传失败: ${err.message}` });
+  }
+  await fsp.rename(tmp, dest);
+
+  const rel = path.posix.join(String(req.query.path || '/'), name);
+  req.inst.log('INFO', `[MCSP] 已上传: ${rel} (${(size / 1048576).toFixed(2)} MB)`);
+  if (name === 'server.properties') req.inst.invalidatePropsCache();
+  res.json({ ok: true, name, size });
 }));
 
 router.delete('/:iid/files', asyncHandler(async (req, res) => {

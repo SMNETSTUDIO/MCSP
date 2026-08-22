@@ -15,7 +15,7 @@ function listBackups(inst) {
     .filter((f) => f.endsWith('.tar.gz'))
     .map((f) => {
       const st = fs.statSync(path.join(backupDir(inst), f));
-      return { id: f, name: f.replace(/\.tar\.gz$/, ''), sizeMB: +(st.size / 1048576).toFixed(1), createdAt: st.mtimeMs };
+      return { id: f, name: f.replace(/\.tar\.gz$/, ''), size: st.size, sizeMB: +(st.size / 1048576).toFixed(1), createdAt: st.mtimeMs };
     })
     .sort((a, b) => b.createdAt - a.createdAt);
 }

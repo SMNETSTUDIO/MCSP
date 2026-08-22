@@ -14,6 +14,8 @@ const config = {
   BACKUPS_DIR: path.join(ROOT, 'backups'),
   BIN_DIR: path.join(ROOT, 'bin'),
   JAVA_BIN: process.env.JAVA_BIN || 'java',
+  // 单个上传文件的大小上限(整合包/世界压缩包可能很大,默认 2 GB)
+  MAX_UPLOAD_MB: Math.max(1, parseInt(process.env.MCSP_MAX_UPLOAD_MB, 10) || 2048),
   TUNNEL_ARCH: os.arch() === 'arm64' ? 'arm64' : 'amd64',
   PANEL_STARTED: Date.now(),
   SESSION_TTL_MS: 7 * 86400_000,

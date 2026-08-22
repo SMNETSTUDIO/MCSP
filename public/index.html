@@ -232,10 +232,14 @@
           <div class="files-toolbar">
             <div class="breadcrumb" id="fm-crumb"></div>
             <div class="spacer"></div>
+            <button class="icon-btn" id="fm-upload">⬆ 上传</button>
             <button class="icon-btn" id="fm-newfile">＋ 文件</button>
             <button class="icon-btn" id="fm-newdir">＋ 文件夹</button>
+            <input type="file" id="fm-file-input" multiple hidden />
           </div>
+          <div class="upload-list" id="fm-uploads" hidden></div>
           <div class="file-table" id="fm-list"></div>
+          <div class="fm-dropmask" id="fm-dropmask" hidden>松开即可上传到当前目录</div>
         </div>
         <div class="card glass editor-card" id="fm-editor" hidden>
           <div class="files-toolbar">

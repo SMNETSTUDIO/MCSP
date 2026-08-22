@@ -68,6 +68,13 @@ server.js(入口,10 行)
 
 - 全部 `/api`(除 health/auth/login)要求 HttpOnly Cookie 会话;admin 路由再叠 `requireAdmin`
 - 文件 API 路径沙箱:`path.resolve` 后必须仍在实例目录内;在线编辑仅限文本扩展名 ≤2MB
+- 上传是原始流(`POST …/files/upload`,body 即文件本身,不引 multipart 依赖):
+  先写 `.mcsp-upload-*` 再 rename,中断不留半截文件;文件名必须单段(禁 `/` `\` `.` `..` 与控制字符),
+  超过 `MCSP_MAX_UPLOAD_MB`(默认 2048)立即断流回 413
+- 下载走同一个沙箱:文件用 `res.download` 原样回传,目录现 `tar czf -` 流式打包(不落盘、
+  客户端断开即 SIGKILL 掉 tar);实例根目录不给下载,那是「备份」的活(会先 save-all)
+- 备份 id 必须匹配 `^[\w.-]+\.tar\.gz$` —— Express 会解码 `:id`,不校验的话 `..%2F` 能带着
+  `path.join` 走出 `backups/`(download/restore/delete 三处共用该校验)
 - 登录限速(5 次失败锁 1 分钟);隧道配置输入全部白名单化清洗
 - 全局错误中间件 + `asyncHandler`:异步路由抛错返回 500 JSON,不打崩进程
 
