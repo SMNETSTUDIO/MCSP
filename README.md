@@ -4,10 +4,15 @@
 
 **MineCraft Server Panel** · 像素风 / 液态玻璃双主题的 Minecraft 服务器管理面板
 
-实例是**真实的** `java -jar` 子进程,10 种服务端**官方源**自动安装,
-内置**五种内网穿透**与 **authlib-injector 外置登录**,多租户资源配额管理。
-Instances are **real** `java -jar` child processes. 10 server types auto-installed from **official sources**,
-with **5 built-in tunnels**, **authlib-injector external auth**, and multi-tenant resource quota management.
+在自己的机器上开服:选好版本,面板从官方源下载服务端并拉起 `java -jar` 子进程 ——
+控制台、玩家列表、CPU/内存曲线都来自这个进程本身。Java 不用预装,没有公网 IP 也能让朋友进服。
+
+Run Minecraft servers on your own box: pick a version, MCSP fetches it from the official source
+and starts a real `java -jar` child process — the console, player list and CPU/RAM charts all come
+from that process. No Java pre-install, no public IP required.
+
+10 种服务端 · 6 种内网穿透 · 一键装 Java · authlib-injector 外置登录 · 多租户配额<br>
+10 server types · 6 tunnels · one-click Java · external auth · multi-tenant quotas
 
 [功能 Features](#-功能-features) · [快速开始 Quick Start](#-快速开始-quick-start) · [架构 Architecture](#-架构-architecture) · [验收 Acceptance](#-验收-acceptance) · [许可证 License](#-许可证-license)
 
@@ -28,7 +33,7 @@ with **5 built-in tunnels**, **authlib-injector external auth**, and multi-tenan
 | ☕ 面板内**一键安装 Java**(Temurin 25/21/17/8),按 MC 版本自动匹配运行时 | **One-click Java install** (Temurin 25/21/17/8), auto-matched to the MC version |
 | 🎮 外置登录:**authlib-injector** 自动下载 + `-javaagent` 注入,对接 LittleSkin 等 Yggdrasil 皮肤站 | External auth: auto-downloaded **authlib-injector** injected via `-javaagent`, works with LittleSkin & any Yggdrasil API |
 | ❯_ 控制台 = 真实 stdout 流(SSE)+ stdin 命令(↑↓ 历史);玩家/封禁/白名单/OP 均为真实数据 | Console = real stdout stream (SSE) + stdin commands; players/bans/whitelist/OP are real server data |
-| ⇄ 五种内网穿透:**bore / playit.gg / Pinggy / ngrok / frpc**,每实例独立隧道、公网地址自动解析;frpc 支持 **frps-panel** 多用户鉴权(user + metadatas.token) | 5 tunnels: **bore / playit.gg / Pinggy / ngrok / frpc**, one tunnel per instance with auto-parsed public address; frpc supports **frps-panel** auth (user + metadatas.token) |
+| ⇄ 六种内网穿透:**bore / playit.gg / Pinggy / Serveo / ngrok / frpc**,每实例独立隧道、公网地址自动解析;frpc 支持 **frps-panel** 多用户鉴权(user + metadatas.token) | 6 tunnels: **bore / playit.gg / Pinggy / Serveo / ngrok / frpc**, one tunnel per instance with auto-parsed public address; frpc supports **frps-panel** auth (user + metadatas.token) |
 | 📊 指标采样自 `/proc/<pid>`:真实 CPU% / RSS 内存实时曲线 | Metrics sampled from `/proc/<pid>`: real CPU% / RSS with live charts |
 | 🗀 文件管理器(路径沙箱):在线编辑 + **拖拽/多选上传**(实时进度条)+ **文件下载 / 目录打包 tar.gz 下载**、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager: online editing + **drag-and-drop / multi-file upload** with live progress + **file download / folder download as tar.gz**, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
 | ⧉ 真实 `tar.gz` 备份/恢复/**下载**,备份前自动 `save-all` | Real `tar.gz` backup / restore / **download**, with automatic `save-all` |
@@ -93,7 +98,7 @@ npm run pm2                  # 或 PM2 常驻 or run under PM2
 浏览器 Browser ──► Express(server.js + src/)──► spawn(java -jar server.jar)× N 实例
                     │  SSE 日志/状态流 log & state stream       │ stdout 解析 / stdin 命令
                     │                                           └► /proc/<pid> 指标 metrics
-                    └► 每实例独立隧道进程 per-instance tunnel(bore / playit / Pinggy / ngrok / frpc)
+                    └► 每实例独立隧道进程 per-instance tunnel(bore / playit / Pinggy / Serveo / ngrok / frpc)
 
 src/
   app.js 装配 · auth.js 认证 · oauth.js OAuth2 · instance.js 核心领域对象
