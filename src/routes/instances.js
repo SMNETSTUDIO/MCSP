@@ -405,20 +405,92 @@ router.post('/:iid/players/:name/:action', (req, res) => {
 
 /* ── 世界 ── */
 
+/** 一个目录是不是世界:认 level.dat。维度目录(DIM-1/DIM1)没有自己的 level.dat,
+    所以 Paper 的 world_nether/world_the_end 会被单独识别,而原版的 world/DIM-1 不会 —— 正合适 */
+const isWorldDir = (p) => fs.existsSync(path.join(p, 'level.dat'));
+
+function worldEnv(name, level) {
+  if (name === level + '_nether') return 'nether';
+  if (name === level + '_the_end') return 'the_end';
+  return 'normal';
+}
+
 router.get('/:iid/worlds', asyncHandler(async (req, res) => {
   const inst = req.inst;
-  const levelName = inst.getProp('level-name') || 'world';
+  const level = inst.getProp('level-name') || 'world';
+  let entries = [];
+  try { entries = await fsp.readdir(inst.dir, { withFileTypes: true }); } catch {}
   const out = [];
-  for (const suffix of ['', '_nether', '_the_end']) {
-    const dir = path.join(inst.dir, levelName + suffix);
-    if (!fs.existsSync(dir)) continue;
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const dir = path.join(inst.dir, e.name);
+    if (!isWorldDir(dir)) continue;
+    const env = worldEnv(e.name, level);
     out.push({
-      name: levelName + suffix,
-      env: suffix === '' ? 'normal' : suffix === '_nether' ? 'nether' : 'the_end',
+      name: e.name,
+      env,
+      // 主世界 = 当前 level-name;它的下界/末地也算"在用",不给单独删
+      active: e.name === level,
+      linked: env !== 'normal' && e.name.startsWith(level),
       sizeMB: +((await dirSize(dir)) / 1048576).toFixed(1),
+      mtime: (await fsp.stat(dir)).mtimeMs,
     });
   }
+  out.sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
   res.json(out);
+}));
+
+/** 切换当前世界:改 level-name,重启生效 */
+router.post('/:iid/worlds/activate', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const name = String((req.body && req.body.name) || '');
+  if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '世界名非法' });
+  if (!isWorldDir(path.join(inst.dir, name))) return res.status(404).json({ ok: false, error: '该目录不是一个世界(缺少 level.dat)' });
+  const props = inst.readProps();
+  props['level-name'] = name;
+  inst.writeProps(props);
+  inst.invalidatePropsCache();
+  inst.log('INFO', `[MCSP] 当前世界已切换为 ${name}` + (inst.state === 'running' ? '(重启后生效)' : ''));
+  inst.emitState();
+  res.json({ ok: true });
+}));
+
+/** 新建世界:只写 level-name(+可选种子),真正的地形由服务端下次启动时生成 */
+router.post('/:iid/worlds/create', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { name, seed } = req.body || {};
+  const n = String(name || '').trim();
+  if (!isSafeName(n)) return res.status(400).json({ ok: false, error: '世界名非法' });
+  if (fs.existsSync(path.join(inst.dir, n))) return res.status(409).json({ ok: false, error: '同名目录已存在' });
+  if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再新建世界' });
+
+  const props = inst.readProps();
+  props['level-name'] = n;
+  props['level-seed'] = String(seed || '').replace(/[\r\n=]/g, '').slice(0, 64);
+  inst.writeProps(props);
+  inst.invalidatePropsCache();
+  inst.log('INFO', `[MCSP] 已切换到新世界 ${n}${props['level-seed'] ? ` (种子 ${props['level-seed']})` : ''},启动实例后由服务端生成地形`);
+  inst.emitState();
+  res.json({ ok: true, note: '启动实例后服务端会生成这个世界' });
+}));
+
+router.delete('/:iid/worlds/:name', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const name = req.params.name;
+  if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '世界名非法' });
+  const level = inst.getProp('level-name') || 'world';
+  // 正在用的世界(以及它的下界/末地)不给删 —— 删完服务端会重新生成一个空世界,
+  // 用户多半以为是"清档"其实是丢档
+  if (name === level || name.startsWith(level + '_')) {
+    return res.status(400).json({ ok: false, error: `「${name}」是当前正在使用的世界,请先切换到别的世界再删` });
+  }
+  if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再删除世界' });
+  const dir = path.join(inst.dir, name);
+  if (!isWorldDir(dir)) return res.status(404).json({ ok: false, error: '世界不存在' });
+  await fsp.rm(dir, { recursive: true, force: true });
+  disk.refresh(inst.id);
+  inst.log('WARN', `[MCSP] 已删除世界 ${name}`);
+  res.json({ ok: true });
 }));
 
 router.post('/:iid/worlds/:name/:action', (req, res) => {

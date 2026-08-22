@@ -241,6 +241,19 @@
 
       <!-- Worlds -->
       <section class="view" id="view-worlds">
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>新建世界 <span class="dim small">写入 level-name,启动实例后由服务端生成地形</span></span>
+            <span>
+              <input id="nw-name" type="text" placeholder="世界名,如 world2" style="width:150px" />
+              <input id="nw-seed" type="text" placeholder="种子(可留空)" style="width:150px" />
+              <button class="btn btn-blue small-btn" id="nw-go">新建并切换</button>
+            </span>
+          </div>
+          <div class="dim small">
+            已有的世界压缩包可在「文件」页上传后解压到实例根目录,这里就会出现,再点「设为当前」即可。
+          </div>
+        </div>
         <div id="world-grid" class="world-grid"></div>
       </section>
 

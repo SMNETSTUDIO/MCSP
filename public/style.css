@@ -1366,3 +1366,6 @@ body {
 .mr-row .mr-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 [data-theme="light"] .mr-row { border-bottom-color: rgba(0, 0, 0, 0.06); }
 @media (max-width: 760px) { .mr-row { grid-template-columns: 40px 1fr; } .mr-row button { grid-column: 2; justify-self: start; } }
+
+.chip.danger { color: var(--red); border-color: rgba(255, 69, 58, 0.35); }
+.chip.danger:hover { background: rgba(255, 69, 58, 0.25); }

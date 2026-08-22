@@ -719,6 +719,33 @@ const WORLD_META = {
   the_end: ['🐉', '末地'],
 };
 
+$('#nw-go').addEventListener('click', async () => {
+  const name = $('#nw-name').value.trim();
+  if (!name) return toast('填个世界名', true);
+  if (!confirm(`新建世界「${name}」并切换过去?\n\n当前世界的存档不会被删,可以随时切回来。\n实例需要重新启动,由服务端生成地形。`)) return;
+  const r = await iapi('/worlds/create', { method: 'POST', body: { name, seed: $('#nw-seed').value.trim() } });
+  if (!r.ok) return toast(r.error, true);
+  $('#nw-name').value = ''; $('#nw-seed').value = '';
+  toast('已切换,启动实例后生成');
+  loadWorlds();
+});
+
+$('#world-grid').addEventListener('click', async (e) => {
+  const use = e.target.closest('[data-wuse]');
+  if (use) {
+    if (!confirm(`把「${use.dataset.wuse}」设为当前世界?重启实例后生效。`)) return;
+    const r = await iapi('/worlds/activate', { method: 'POST', body: { name: use.dataset.wuse } });
+    r.ok ? (toast('已切换,重启实例后生效'), loadWorlds()) : toast(r.error, true);
+    return;
+  }
+  const del = e.target.closest('[data-wdel]');
+  if (del) {
+    if (!confirm(`删除世界「${del.dataset.wdel}」?\n\n存档会被真的删掉且无法撤销。建议先在「备份」页做一份。`)) return;
+    const r = await iapi(`/worlds/${encodeURIComponent(del.dataset.wdel)}`, { method: 'DELETE' });
+    r.ok ? (toast('已删除'), loadWorlds()) : toast(r.error, true);
+  }
+});
+
 async function loadWorlds() {
   const worlds = await iapi('/worlds');
   if (!worlds.length) {
@@ -736,7 +763,13 @@ async function loadWorlds() {
         <div class="world-info">
           磁盘占用 <b>${w.sizeMB >= 1024 ? (w.sizeMB / 1024).toFixed(2) + ' GB' : w.sizeMB + ' MB'}</b>
         </div>
-        ${overworld ? `
+        <div class="world-actions">
+          ${w.active ? '<span class="task-badge">当前世界</span>'
+            : w.linked ? '<span class="task-badge off">属于当前世界</span>'
+            : `<button class="chip" data-wuse="${escapeHtml(w.name)}">设为当前</button>
+               <button class="chip danger" data-wdel="${escapeHtml(w.name)}">删除</button>`}
+        </div>
+        ${overworld && w.active ? `
         <div class="world-actions">
           <button class="chip" data-world="${w.name}" data-wact="time" data-val="day">☀️ 白天</button>
           <button class="chip" data-world="${w.name}" data-wact="time" data-val="night">🌙 夜晚</button>
