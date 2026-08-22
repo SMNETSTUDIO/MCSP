@@ -28,6 +28,26 @@ const CRASH_RESTART_DELAY_MS = 5000;
 /* 面板正在退出:此时子进程被挨个 stop 掉是预期行为,不能当崩溃处理 */
 const panel = { shuttingDown: false };
 
+/**
+ * 本机正在 LISTEN 的 TCP 端口。
+ * 读 /proc 而不是试着 bind 一下:bind 是异步的,而 start() 是同步返回 {ok,error} 的,
+ * 改成异步要动所有调用方。面板本来就只跑 Linux(指标也读 /proc),这里代价最小。
+ */
+function listeningPorts() {
+  const ports = new Set();
+  for (const f of ['/proc/net/tcp', '/proc/net/tcp6']) {
+    let text;
+    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
+    for (const line of text.split('\n').slice(1)) {
+      const col = line.trim().split(/\s+/);
+      if (col.length < 4 || col[3] !== '0A') continue;   // st=0A 即 TCP_LISTEN
+      const hex = col[1].split(':')[1];
+      if (hex) ports.add(parseInt(hex, 16));
+    }
+  }
+  return ports;
+}
+
 class Instance {
   constructor(meta) {
     this.id = meta.id;
@@ -180,11 +200,15 @@ class Instance {
   start({ auto = false } = {}) {
     if (this.state !== 'stopped') return { ok: false, error: `实例当前状态为 ${this.state}` };
     if (!auto) this.cancelAutoRestart();     // 手动启动 = 用户已介入,计数与封禁一并清零
-    this._setWasRunning(true);
     const t = TYPES[this.type] || TYPES.paper;
     const argsFile = t.installer ? this.findArgsFile() : null;
     if (!argsFile && !fs.existsSync(path.join(this.dir, this.jar))) {
       return { ok: false, error: `找不到 ${this.jar},请重新安装实例` };
+    }
+    const portErr = this._portConflict();
+    if (portErr) {
+      this.log('ERROR', `[MCSP] 启动中止: ${portErr}`);
+      return { ok: false, error: portErr };
     }
 
     this.state = 'starting';
@@ -233,6 +257,9 @@ class Instance {
 
     this.proc = proc;
     this._lastCpu = null;
+    // 进程真的起来了才记"该开着":否则端口占用/缺 jar 这种失败也会被记下,
+    // 面板下次重启还会徒劳地恢复它一遍
+    this._setWasRunning(true);
 
     let buf = '';
     const onData = (chunk) => {
@@ -268,7 +295,10 @@ class Instance {
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       if (this._restartAfterExit) {
         this._restartAfterExit = false;
-        setTimeout(() => this.start({ auto: true }), 1000);
+        setTimeout(() => {
+          const r = this.start({ auto: true });
+          if (!r.ok) this.log('ERROR', `[MCSP] 重启失败: ${r.error}`);
+        }, 1000);
         return;
       }
       // 崩溃 = 没人要它停,而且退出码不为 0。
@@ -300,6 +330,28 @@ class Instance {
       const r = this.start({ auto: true });
       if (!r.ok) this.log('ERROR', `[MCSP] 自动重启失败: ${r.error}`);
     }, CRASH_RESTART_DELAY_MS);
+  }
+
+  /**
+   * 启动前的端口占用检查,返回错误文案或 null。
+   * 不查也能启动 —— java 自己会因为 BindException 退出 —— 但那条报错埋在
+   * 一大段 Java 栈里,而且现在还会触发崩溃自动重启,反复撞同一个端口。
+   * 代理(Velocity/Bungee)端口写在自己的配置里,读不到 server-port,跳过检查。
+   */
+  _portConflict() {
+    const port = parseInt(this.getProp('server-port'), 10);
+    if (!port) return null;
+
+    // 先看同面板的其它实例:能报出是哪个实例,比"端口被占用"有用得多
+    let peers = [];
+    try { peers = [...require('./registry').instances.values()]; } catch {}
+    const peer = peers.find((i) => i !== this && i.proc && parseInt(i.getProp('server-port'), 10) === port);
+    if (peer) return `端口 ${port} 正被实例「${peer.name}」占用,请改 server-port 或先停掉它`;
+
+    if (listeningPorts().has(port)) {
+      return `端口 ${port} 已被本机其它进程占用 —— 若面板刚被强制重启(kill -9),可能是上次残留的服务端进程还在跑`;
+    }
+    return null;
   }
 
   /**

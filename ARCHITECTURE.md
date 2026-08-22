@@ -46,6 +46,9 @@ server.js(入口,10 行)
     所以"崩了之后面板也挂了"仍会被拉回来);面板监听端口后 `resumeInstances()` 把
     `autoStart && wasRunning` 的实例每 5s 拉起一个。用户主动停掉的实例 `wasRunning=false`,
     不会因为面板重启又自己跑起来
+  - **启动前查端口**:同面板实例撞端口能报出是哪个实例;本机其它进程占用则读
+    `/proc/net/tcp{,6}` 的 LISTEN 项判定(不用试 bind —— 那是异步的,而 `start()`
+    同步返回)。不查也能起,但 BindException 埋在 Java 栈里,还会触发崩溃自动重启反复撞
   - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样
 - **隧道进程**(独立于服务端,重启实例不断线):ngrok / frpc / playit / bore /
   Pinggy / Serveo 六种驱动,统一输出解析(`\r`/`\n` 双分隔 + ANSI 清洗),
