@@ -1176,6 +1176,10 @@ async function loadTasks() {
       <div>
         <div class="backup-name">${escapeHtml(t.name)} <span class="task-badge ${t.enabled ? '' : 'off'}">${t.enabled ? '启用' : '停用'}</span></div>
         <div class="backup-meta">${ACTION_TEXT[t.action]}${t.payload ? ` · /${escapeHtml(t.payload)}` : ''} · ${t.scheduleText} · 上次执行 ${t.lastRun ? fmtAgo(t.lastRun) : '从未'}</div>
+        ${t.lastResult ? `<div class="backup-meta task-result ${t.lastResult.ok ? 'ok' : 'bad'}">
+          ${t.lastResult.ok ? '✔' : '✘'} ${escapeHtml(t.lastResult.msg || '')}
+          ${t.failStreak > 1 ? `<b>· 已连续 ${t.failStreak} 次未成功</b>` : ''}
+        </div>` : ''}
       </div>
       <div class="spacer"></div>
       <button class="icon-btn" data-tact="run" data-id="${t.id}">立即执行</button>
@@ -1211,8 +1215,10 @@ $('#task-list').addEventListener('click', async (e) => {
   } else if (tact === 'toggle') {
     await iapi(`/tasks/${id}/toggle`, { method: 'POST' });
   } else if (tact === 'run') {
-    await iapi(`/tasks/${id}/run`, { method: 'POST' });
-    toast('已触发执行');
+    const r = await iapi(`/tasks/${id}/run`, { method: 'POST' });
+    // 直接回显结果 —— "已触发"什么都没说明,任务很可能因为状态不对根本没干活
+    if (r && r.result) toast(`${r.result.ok ? '执行完成' : '未生效'}: ${r.result.msg}`, !r.result.ok);
+    else toast('已触发执行');
   }
   loadTasks();
 });

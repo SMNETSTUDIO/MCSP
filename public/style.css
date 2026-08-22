@@ -1325,3 +1325,7 @@ body {
 .console-toolbar .spacer { flex: 1; }
 .console-toolbar input[type="search"] { flex: 1 1 240px; min-width: 160px; }
 .console-toolbar select { flex: 0 0 auto; }
+
+/* ── 计划任务执行结果 ── */
+.task-result.ok { color: var(--green); }
+.task-result.bad { color: var(--amber); }

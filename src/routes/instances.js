@@ -908,8 +908,8 @@ router.post('/:iid/tasks/:id/toggle', (req, res) => {
 router.post('/:iid/tasks/:id/run', asyncHandler(async (req, res) => {
   const task = taskStore.tasks.find((t) => t.id === req.params.id && t.iid === req.params.iid);
   if (!task) return res.status(404).json({ ok: false, error: '任务不存在' });
-  await runTask(task);
-  res.json({ ok: true });
+  const result = await runTask(task);
+  res.json({ ok: true, result });
 }));
 
 router.delete('/:iid/tasks/:id', (req, res) => {
