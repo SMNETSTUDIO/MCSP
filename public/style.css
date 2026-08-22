@@ -1329,3 +1329,23 @@ body {
 /* ── 计划任务执行结果 ── */
 .task-result.ok { color: var(--green); }
 .task-result.bad { color: var(--amber); }
+
+/* ── 操作审计 ── */
+.audit-row {
+  display: grid; grid-template-columns: 150px 90px 150px 46px 1fr;
+  align-items: center; gap: 10px;
+  padding: 6px 4px; font-size: 12.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.audit-row:last-child { border-bottom: none; }
+.audit-row .au-user { font-weight: 600; }
+.audit-row .au-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-row .au-status { font-variant-numeric: tabular-nums; text-align: right; }
+.audit-row .au-status.ok { color: var(--green); }
+.audit-row .au-status.bad { color: var(--red); }
+.audit-row.bad { background: rgba(255, 69, 58, 0.06); }
+[data-theme="light"] .audit-row { border-bottom-color: rgba(0, 0, 0, 0.06); }
+@media (max-width: 760px) {
+  .audit-row { grid-template-columns: 1fr auto; }
+  .audit-row .au-time, .audit-row .au-detail { display: none; }
+}

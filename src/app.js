@@ -18,6 +18,10 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, uptime: Date.now() - PANEL_STARTED, instances: registry.instances.size });
 });
 
+/* 审计:所有写操作都记一笔。挂在最前面,连登录尝试(含失败的)一起记 —— 
+   排查"谁在暴力试密码"时那正是要看的东西 */
+app.use('/api', require('./audit').middleware);
+
 /* 认证路由(login/logout/me/password) */
 app.use('/api/auth', auth.router);
 
@@ -31,6 +35,12 @@ app.use('/api/oauth', require('./oauth').adminRouter);
 app.use('/api/settings', require('./settings').router);   // 系统设置:注册开关、公告
 
 app.use('/api/users', require('./routes/users').router);
+
+/* 审计日志查询(仅管理员) */
+app.get('/api/audit', auth.requireAdmin, (req, res) => {
+  res.json({ ok: true, ...require('./audit').read(req.query) });
+});
+
 app.use('/api', require('./routes/host'));           // /api/host, /api/paper/versions
 app.use('/api/tunnel', require('./routes/tunnel'));  // 组件安装
 app.use('/api/instances', require('./routes/instances'));

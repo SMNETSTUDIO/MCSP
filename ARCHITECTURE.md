@@ -21,6 +21,7 @@ server.js(入口,10 行)
         ├─ src/archive.js     压缩包:zip 用 zlib 自读写,tar 家族调系统 tar(均先做安全校验)
         ├─ src/disk.js        磁盘用量:分区 statfs + 每实例体积后台缓存(60s)
         ├─ src/notify.js      告警推送:通用 Webhook / Discord / Telegram(去重 + 永不抛错)
+        ├─ src/audit.js       操作审计:写操作通用中间件 + JSONL 落盘 + 滚动
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -122,6 +123,19 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
 - **同事件同对象 5 分钟内只发一次**(`dedupeKey`),否则崩溃重启循环会把群刷爆。
 - 目标地址发送前校验必须是 `http(s)`,挡掉 `file://` 之类,别把面板变成内网探测器。
 
+## 操作审计(src/audit.js)
+
+做成**通用中间件**而不是逐路由手写:后者一定会漏,新增路由时也没人记得补。
+代价是动作名要从 `method + path` 反推,所以有一张对照表,匹配不到就退化成 `METHOD /path`。
+
+记在 `res.on('finish')` 里,所以**状态码一起记下来** —— 403/404 这类失败尝试同样留痕,
+排查越权和暴力破解时那正是要看的。登录路由挂在 `requireAuth` 之前,用户名从 body 取,
+失败的登录也有记录。GET 不记(否则日志全是刷新页面)。
+
+`password` / `token` / `secret` 等字段递归替换成 `***` —— 审计日志本身不该成为凭据泄露点。
+上传接口 body 是文件原始字节,只记 JSON 请求的参数。
+落 `data/audit.log`,超过 `MCSP_AUDIT_MB`(默认 16)滚一次,只留一个 `.1`。
+
 ## 数据与持久化(data/,gitignore)
 
 | 文件 | 内容 | 写入时机 |
@@ -131,6 +145,7 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
 | instances.json | 实例元数据 + 穿透配置 | 实例/配置变更 |
 | tasks.json | 计划任务 | 任务变更、每次触发 |
 | settings.json | 注册开关、公告、备份保留策略、告警推送配置 | 系统设置保存时 |
+| audit.log(.1) | 操作审计 JSONL(含失败尝试) | 每个写请求结束时 |
 | frpc-\<iid\>.toml / playit-\<iid\>.toml | 隧道进程配置/密钥 | 隧道启动/绑定 |
 | ssh/id_ed25519(.pub) | SSH 类隧道专用密钥 | 首次使用时生成 |
 

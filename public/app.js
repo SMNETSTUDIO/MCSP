@@ -1742,6 +1742,33 @@ $('#nt-test').addEventListener('click', async () => {
     || '没有配置任何推送目标';
 });
 
+async function loadAudit() {
+  const q = $('#au-q').value.trim();
+  const d = await api(`/audit?limit=100${q ? '&q=' + encodeURIComponent(q) : ''}`);
+  const rows = (d && d.rows) || [];
+  $('#audit-list').innerHTML = rows.length ? rows.map((r) => {
+    const bad = r.status >= 400;
+    const params = r.params && Object.keys(r.params).length
+      ? escapeHtml(JSON.stringify(r.params)).slice(0, 160) : '';
+    return `<div class="audit-row ${bad ? 'bad' : ''}">
+      <div class="au-time dim small">${new Date(r.at).toLocaleString('zh-CN')}</div>
+      <div class="au-user">${escapeHtml(r.user)}</div>
+      <div class="au-action">${escapeHtml(r.action)}</div>
+      <div class="au-status ${bad ? 'bad' : 'ok'}">${r.status}</div>
+      <div class="au-detail dim small" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}${params ? ' · ' + params : ''}</div>
+    </div>`;
+  }).join('') : '<div class="empty">暂无审计记录</div>';
+  if (d && d.total > rows.length) {
+    $('#audit-list').insertAdjacentHTML('beforeend',
+      `<div class="dim small" style="padding:8px 4px">共 ${d.total} 条,只显示最近 ${rows.length} 条</div>`);
+  }
+}
+$('#au-refresh').addEventListener('click', loadAudit);
+$('#au-q').addEventListener('input', (() => {
+  let t = null;
+  return () => { clearTimeout(t); t = setTimeout(loadAudit, 300); };
+})());
+
 async function loadSystem() {
   loadOauthConfig();   // OAuth 第三方登录配置卡片在本视图内
   const s = await api('/settings');
@@ -1750,6 +1777,7 @@ async function loadSystem() {
   $('#sys-bk-days').value = s.backupKeepDays ?? 30;
   $('#sys-announcement').value = s.announcement || '';
   renderNotify(s.notify);
+  loadAudit();
 }
 
 $('#sys-save').addEventListener('click', async () => {

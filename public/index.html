@@ -552,6 +552,17 @@
 
         <div class="card glass" style="margin-top:18px">
           <div class="card-title row-between">
+            <span>操作审计 <span class="dim small">所有写操作,含失败尝试</span></span>
+            <span>
+              <input id="au-q" type="search" placeholder="筛选(用户/动作/路径)" style="width:200px" />
+              <button class="icon-btn" id="au-refresh">刷新</button>
+            </span>
+          </div>
+          <div id="audit-list"></div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
             <span>告警推送 <span class="task-badge off" id="nt-status">未启用</span></span>
             <span>
               <button class="icon-btn" id="nt-test">发送测试</button>
