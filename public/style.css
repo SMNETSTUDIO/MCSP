@@ -755,7 +755,7 @@ body {
 
 /* ── file manager ── */
 
-.files-card { display: flex; flex-direction: column; }
+.files-card { display: flex; flex-direction: column; position: relative; }
 .files-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .files-toolbar .spacer { flex: 1; }
 .breadcrumb { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-size: 13px; }
@@ -769,7 +769,7 @@ body {
 
 .file-table { display: flex; flex-direction: column; }
 .file-row {
-  display: grid; grid-template-columns: 26px 1fr 110px 130px 70px;
+  display: grid; grid-template-columns: 26px 1fr 110px 130px auto;
   align-items: center; gap: 10px;
   padding: 9px 12px; border-radius: 11px;
   font-size: 13px; cursor: default;
@@ -780,7 +780,44 @@ body {
 .file-row .f-ico { font-size: 15px; text-align: center; }
 .file-row .f-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .file-row .f-size, .file-row .f-time { color: var(--text-dim); font-size: 12px; }
-.file-row .f-del { justify-self: end; }
+.file-row .f-actions { display: flex; gap: 6px; justify-self: end; }
+
+/* ── upload(进度条 + 拖拽遮罩)── */
+
+.upload-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.up-row {
+  display: grid; grid-template-columns: 1fr 160px 108px;
+  align-items: center; gap: 12px;
+  padding: 8px 12px; border-radius: 11px; font-size: 13px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.up-row .up-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.up-row .up-bar {
+  height: 5px; border-radius: 3px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.12);
+}
+.up-row .up-bar i {
+  display: block; height: 100%; width: 0;
+  background: var(--blue); transition: width 0.2s;
+}
+.up-row .up-pct {
+  font-size: 12px; color: var(--text-dim); text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.up-row.done .up-bar i { background: var(--green); }
+.up-row.done .up-pct { color: var(--green); }
+.up-row.fail .up-bar i { background: var(--red); }
+.up-row.fail .up-pct { color: var(--red); }
+
+.fm-dropmask {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 600; color: var(--blue);
+  background: rgba(var(--acc-rgb), 0.12);
+  border: 2px dashed rgba(var(--acc-rgb), 0.55);
+  border-radius: var(--radius);
+  pointer-events: none;   /* 否则遮罩自己会吃掉 dragleave/drop */
+}
 
 .editor-card { margin-top: 18px; }
 #fm-content {
@@ -911,6 +948,8 @@ body {
   border-color: rgba(0, 0, 0, 0.06);
 }
 [data-theme="light"] .file-row:hover { background: rgba(0, 0, 0, 0.045); }
+[data-theme="light"] .up-row { background: rgba(0, 0, 0, 0.045); }
+[data-theme="light"] .up-row .up-bar { background: rgba(0, 0, 0, 0.1); }
 [data-theme="light"] .bar { background: rgba(0, 0, 0, 0.1); }
 [data-theme="light"] .pill-gray { background: rgba(120, 120, 128, 0.16); color: #6e6e73; }
 [data-theme="light"] .pill-green { color: #1d8a43; box-shadow: 0 0 14px rgba(48, 209, 88, 0.2); }

@@ -30,8 +30,8 @@ with **5 built-in tunnels**, **authlib-injector external auth**, and multi-tenan
 | ❯_ 控制台 = 真实 stdout 流(SSE)+ stdin 命令(↑↓ 历史);玩家/封禁/白名单/OP 均为真实数据 | Console = real stdout stream (SSE) + stdin commands; players/bans/whitelist/OP are real server data |
 | ⇄ 五种内网穿透:**bore / playit.gg / Pinggy / ngrok / frpc**,每实例独立隧道、公网地址自动解析;frpc 支持 **frps-panel** 多用户鉴权(user + metadatas.token) | 5 tunnels: **bore / playit.gg / Pinggy / ngrok / frpc**, one tunnel per instance with auto-parsed public address; frpc supports **frps-panel** auth (user + metadatas.token) |
 | 📊 指标采样自 `/proc/<pid>`:真实 CPU% / RSS 内存实时曲线 | Metrics sampled from `/proc/<pid>`: real CPU% / RSS with live charts |
-| 🗀 文件管理器(路径沙箱)、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
-| ⧉ 真实 `tar.gz` 备份/恢复,备份前自动 `save-all` | Real `tar.gz` backup/restore with automatic `save-all` |
+| 🗀 文件管理器(路径沙箱):在线编辑 + **拖拽/多选上传**(实时进度条)+ **文件下载 / 目录打包 tar.gz 下载**、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager: online editing + **drag-and-drop / multi-file upload** with live progress + **file download / folder download as tar.gz**, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
+| ⧉ 真实 `tar.gz` 备份/恢复/**下载**,备份前自动 `save-all` | Real `tar.gz` backup / restore / **download**, with automatic `save-all` |
 | ◉ 多租户:普通用户实例**隔离**,配额真实生效——实例数 / 内存(-Xmx 之和)/ CPU 核(taskset 绑核) | Multi-tenant: isolated user instances with enforced quotas — instance count / memory (Σ-Xmx) / CPU cores (taskset pinning) |
 | 🎨 双主题:像素风(Minecraft GUI 质感)/ Apple 液态玻璃;深浅色、6 主题色、密度可调 | Two themes: pixel (Minecraft GUI) / Apple liquid glass; dark/light, 6 accent colors, density options |
 

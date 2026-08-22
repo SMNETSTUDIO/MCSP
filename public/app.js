@@ -688,12 +688,16 @@ async function loadFiles(p) {
     const ico = e2.type === 'dir' ? '📁' : e2.binary ? '📦' : '📄';
     const clickable = e2.type === 'dir' || !e2.binary;
     return `
-      <div class="file-row ${clickable ? 'clickable' : ''}" data-type="${e2.type}" data-binary="${e2.binary}" data-path="${escapeHtml(full)}">
+      <div class="file-row ${clickable ? 'clickable' : ''}" data-type="${e2.type}" data-binary="${e2.binary}" data-name="${escapeHtml(e2.name)}" data-path="${escapeHtml(full)}">
         <div class="f-ico">${ico}</div>
         <div class="f-name">${escapeHtml(e2.name)}</div>
         <div class="f-size">${e2.type === 'dir' ? '—' : fmtSize(e2.size)}</div>
         <div class="f-time">${fmtAgo(e2.mtime)}</div>
-        <button class="icon-btn danger f-del" data-fdel="${escapeHtml(full)}">删除</button>
+        <div class="f-actions">
+          <button class="icon-btn" data-fdl="${escapeHtml(full)}" data-fdir="${e2.type === 'dir'}"
+            ${e2.type === 'dir' ? 'title="打包成 tar.gz 下载"' : ''}>下载</button>
+          <button class="icon-btn danger" data-fdel="${escapeHtml(full)}">删除</button>
+        </div>
       </div>`;
   }).join('');
   $('#fm-list').innerHTML = rows || '<div class="empty">空目录</div>';
@@ -705,6 +709,19 @@ $('#fm-crumb').addEventListener('click', (e) => {
 });
 
 $('#fm-list').addEventListener('click', async (e) => {
+  const dl = e.target.closest('[data-fdl]');
+  if (dl) {
+    // 和备份下载同理:交给浏览器,不走 fetch 攒 blob
+    const isDir = dl.dataset.fdir === 'true';
+    const name = dl.dataset.fdl.split('/').pop();
+    const a = document.createElement('a');
+    a.href = `/api/instances/${currentIid}/files/download?path=${encodeURIComponent(dl.dataset.fdl)}`;
+    a.download = isDir ? name + '.tar.gz' : name;
+    a.click();
+    // 目录要先 tar 完才有数据,大世界能压好一会儿,别让用户以为没反应
+    toast(isDir ? '正在打包,稍后开始下载…' : '已开始下载');
+    return;
+  }
   const del = e.target.closest('[data-fdel]');
   if (del) {
     if (!confirm(`删除 ${del.dataset.fdel} ?`)) return;
@@ -745,6 +762,104 @@ $('#fm-newdir').addEventListener('click', async () => {
   if (!name) return;
   const r = await iapi('/files/create', { method: 'POST', body: { dir: fmPath, name, type: 'dir' } });
   r.ok ? loadFiles(fmPath) : toast(r.error, true);
+});
+
+/* ── 上传:XHR(要 upload.progress,fetch 给不了)· body 就是文件本身 ── */
+
+function uploadOne(file, dir, overwrite, onProgress) {
+  return new Promise((resolve) => {
+    const q = `?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}${overwrite ? '&overwrite=1' : ''}`;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/instances/${currentIid}/files/upload${q}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 401) { location.href = '/login'; return resolve({ ok: false, error: '会话已过期' }); }
+      let r = null;
+      try { r = JSON.parse(xhr.responseText); } catch {}
+      resolve(r || { ok: false, error: `HTTP ${xhr.status}` });
+    });
+    xhr.addEventListener('error', () => resolve({ ok: false, error: '网络错误' }));
+    xhr.addEventListener('abort', () => resolve({ ok: false, error: '已取消' }));
+    xhr.send(file);
+  });
+}
+
+async function uploadFiles(fileList) {
+  // 必须先拷成数组:FileList 是 input.files 的实时引用,
+  // 调用方一清空 input.value 它就空了,循环会从第二个文件起全部漏掉
+  const files = [...fileList];
+  if (!files.length) return;
+  const dir = fmPath;
+  // 同名一次问清楚,免得传了几百 MB 才在 409 上卡住
+  const existing = new Set($$('#fm-list .file-row').map((r) => r.dataset.name));
+  const dupes = files.filter((f) => existing.has(f.name));
+  if (dupes.length && !confirm(`以下文件已存在,覆盖?\n${dupes.map((f) => f.name).join('\n')}`)) return;
+
+  const box = $('#fm-uploads');
+  box.hidden = false;
+  box.innerHTML = files.map((f, i) => `
+    <div class="up-row" data-up="${i}">
+      <div class="up-name">${escapeHtml(f.name)}</div>
+      <div class="up-bar"><i></i></div>
+      <div class="up-pct">等待…</div>
+    </div>`).join('');
+
+  let failed = 0;
+  for (let i = 0; i < files.length; i++) {
+    const row = box.querySelector(`[data-up="${i}"]`);
+    const bar = row.querySelector('.up-bar i');
+    const pct = row.querySelector('.up-pct');
+    const r = await uploadOne(files[i], dir, existing.has(files[i].name), (p) => {
+      bar.style.width = `${Math.round(p * 100)}%`;
+      pct.textContent = `${Math.round(p * 100)}%`;
+    });
+    row.classList.add(r.ok ? 'done' : 'fail');
+    bar.style.width = '100%';
+    pct.textContent = r.ok ? '完成' : r.error;
+    pct.title = r.ok ? '' : r.error;      // 错误文案比列宽长,截断后靠 tooltip 看全
+    if (!r.ok) failed++;
+  }
+
+  if (dir === fmPath) loadFiles(fmPath);
+  toast(failed ? `${files.length - failed} 个成功,${failed} 个失败` : `${files.length} 个文件已上传`, !!failed);
+  setTimeout(() => { box.hidden = true; box.innerHTML = ''; }, failed ? 8000 : 2500);
+}
+
+$('#fm-upload').addEventListener('click', () => $('#fm-file-input').click());
+
+$('#fm-file-input').addEventListener('change', (e) => {
+  uploadFiles(e.target.files);
+  e.target.value = '';                    // 同一个文件再选一次也能触发 change
+});
+
+/* 拖拽上传:dragenter/leave 会在子元素间乱跳,用计数器判断真正离开卡片 */
+let fmDragDepth = 0;
+const fmCard = $('#view-files .files-card');
+
+fmCard.addEventListener('dragenter', (e) => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  if (++fmDragDepth === 1) $('#fm-dropmask').hidden = false;
+});
+fmCard.addEventListener('dragover', (e) => {
+  if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+});
+fmCard.addEventListener('dragleave', () => {
+  if (--fmDragDepth <= 0) { fmDragDepth = 0; $('#fm-dropmask').hidden = true; }
+});
+fmCard.addEventListener('drop', (e) => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  fmDragDepth = 0;
+  $('#fm-dropmask').hidden = true;
+  // 拖进来的目录在 .files 里也是一个 File(大小 0),传上去只会得到一个空文件
+  const entries = [...e.dataTransfer.items].map((it) => (it.webkitGetAsEntry ? it.webkitGetAsEntry() : null));
+  const files = [...e.dataTransfer.files].filter((_, i) => !entries[i] || !entries[i].isDirectory);
+  if (files.length < e.dataTransfer.files.length) toast('已跳过文件夹,暂不支持整目录上传', true);
+  uploadFiles(files);
 });
 
 /* ───────── scheduled tasks ───────── */
@@ -982,9 +1097,10 @@ async function loadBackups() {
       <div class="backup-ico">🗄️</div>
       <div>
         <div class="backup-name">${escapeHtml(b.name)}</div>
-        <div class="backup-meta">${(b.sizeMB / 1024).toFixed(2)} GB · ${fmtAgo(b.createdAt)}</div>
+        <div class="backup-meta">${fmtSize(b.size)} · ${fmtAgo(b.createdAt)}</div>
       </div>
       <div class="spacer"></div>
+      <button class="icon-btn" data-bact="download" data-id="${b.id}">下载</button>
       <button class="icon-btn" data-bact="restore" data-id="${b.id}">恢复</button>
       <button class="icon-btn danger" data-bact="delete" data-id="${b.id}">删除</button>
     </div>`).join('') : '<div class="empty">暂无备份</div>';
@@ -998,7 +1114,14 @@ $('#backup-create').addEventListener('click', async () => {
 $('#backup-list').addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-bact]');
   if (!btn) return;
-  if (btn.dataset.bact === 'restore') {
+  if (btn.dataset.bact === 'download') {
+    // 备份可能有好几 GB,交给浏览器自己下载,不要走 fetch 攒 blob
+    const a = document.createElement('a');
+    a.href = `/api/instances/${currentIid}/backups/${encodeURIComponent(btn.dataset.id)}/download`;
+    a.download = btn.dataset.id;
+    a.click();
+    toast('已开始下载');
+  } else if (btn.dataset.bact === 'restore') {
     const r = await iapi(`/backups/${btn.dataset.id}/restore`, { method: 'POST' });
     r.ok ? toast('备份恢复完成') : toast(r.error, true);
   } else {

@@ -85,11 +85,26 @@ function check(name, cond, detail = '') {
     r = await req('GET', `/api/instances/${iid}/files?path=/../../etc`);
     check('path sandbox', r.status === 400);
 
+    r = await req('POST', `/api/instances/${iid}/files/upload?path=/&name=${encodeURIComponent('../pwn.txt')}`);
+    check('upload name sandbox', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/upload?path=/../../&name=pwn.txt`);
+    check('upload path sandbox', r.status === 400);
+
+    r = await req('GET', `/api/instances/${iid}/files/download?path=/../../etc/passwd`);
+    check('download path sandbox', r.status === 400);
+
+    r = await req('GET', `/api/instances/${iid}/files/download?path=/`);
+    check('download instance root rejected', r.status === 400);
+
     r = await req('GET', `/api/instances/${iid}/properties`);
     check('properties', r.status === 200 && typeof r.json === 'object');
 
     r = await req('GET', `/api/instances/${iid}/backups`);
     check('backups list', r.status === 200 && Array.isArray(r.json));
+
+    r = await req('GET', `/api/instances/${iid}/backups/${encodeURIComponent('../../../etc/passwd.tar.gz')}/download`);
+    check('backup id sandbox', r.status === 404);
 
     r = await req('GET', `/api/instances/${iid}/tasks`);
     check('tasks list', r.status === 200 && Array.isArray(r.json));
