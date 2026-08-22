@@ -25,6 +25,10 @@ const CRASH_WINDOW_MS = 10 * 60_000;
 const CRASH_MAX_RESTARTS = 3;
 const CRASH_RESTART_DELAY_MS = 5000;
 
+/* 控制台内存缓冲行数。原来是 1000,查一次崩溃根本不够翻 ——
+   一行日志对象约 150 字节,5000 行 × 几十个实例仍是几十 MB 量级,可接受。 */
+const LOG_BUFFER_LINES = Math.max(500, parseInt(process.env.MCSP_LOG_LINES, 10) || 5000);
+
 /* 面板正在退出:此时子进程被挨个 stop 掉是预期行为,不能当崩溃处理 */
 const panel = { shuttingDown: false };
 
@@ -156,7 +160,7 @@ class Instance {
   log(level, message) {
     const entry = { time: ts(), level, message };
     this.logs.push(entry);
-    if (this.logs.length > 1000) this.logs.shift();
+    if (this.logs.length > LOG_BUFFER_LINES) this.logs.shift();
     bus.broadcast('log', { iid: this.id, ...entry });
   }
 
@@ -425,7 +429,7 @@ class Instance {
     if (m) { time = m[1]; level = m[2].toUpperCase(); message = m[3]; }
     const entry = { time, level, message };
     this.logs.push(entry);
-    if (this.logs.length > 1000) this.logs.shift();
+    if (this.logs.length > LOG_BUFFER_LINES) this.logs.shift();
     bus.broadcast('log', { iid: this.id, ...entry });
 
     // Paper/Vanilla/Forge 等打 "Done (…)!";BungeeCord 只打 "Listening on …"(带自身时间前缀,不锚定)

@@ -1316,3 +1316,12 @@ body {
   .file-row .f-time { display: none; }
   .file-row .f-actions { grid-column: 1 / -1; flex-wrap: wrap; justify-self: start; }
 }
+
+/* ── 控制台工具栏(搜索 / 级别筛选 / 下载)── */
+
+.console-toolbar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.console-toolbar .spacer { flex: 1; }
+.console-toolbar input[type="search"] { flex: 1 1 240px; min-width: 160px; }
+.console-toolbar select { flex: 0 0 auto; }

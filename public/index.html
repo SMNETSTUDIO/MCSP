@@ -179,6 +179,19 @@
       <!-- Console -->
       <section class="view" id="view-console">
         <div class="card glass console-card">
+          <div class="console-toolbar">
+            <input id="log-q" type="search" placeholder="搜索日志(在整个缓冲区里找,不只是屏幕上这些)" autocomplete="off" />
+            <select id="log-level">
+              <option value="">全部级别</option>
+              <option value="ERROR">仅 ERROR</option>
+              <option value="ERROR,WARN">ERROR + WARN</option>
+              <option value="INFO">仅 INFO</option>
+            </select>
+            <span class="dim small" id="log-count"></span>
+            <div class="spacer"></div>
+            <button class="icon-btn" id="log-clear" hidden>✕ 清除筛选</button>
+            <button class="icon-btn" id="log-download">⬇ 下载日志</button>
+          </div>
           <div id="console" class="console"></div>
           <div class="console-input glass-inner">
             <span class="prompt">/</span>

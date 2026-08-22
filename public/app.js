@@ -181,6 +181,8 @@ async function refreshInstanceContext() {
   $('#dash-log').innerHTML = '';
   for (const entry of logs) appendLog(entry);
   fmPath = '/'; fmOpenFile = null; $('#fm-editor').hidden = true;
+  $('#log-q').value = ''; $('#log-level').value = '';
+  logFilterOn = false; $('#log-clear').hidden = true; $('#log-count').textContent = '';
   applyTopbar();
   drawChart();
 }
@@ -557,8 +559,61 @@ function logLineHtml(entry) {
   return `<div><span class="time">${entry.time}</span><span class="lv-${entry.level}">${entry.level}</span>${escapeHtml(entry.message)}</div>`;
 }
 
+/* 日志筛选:开着筛选时新日志不再实时追加(否则筛选结果会被无关行冲散),
+   顶部显示命中数并提供「清除筛选」回到实时流 */
+let logFilterOn = false;
+
+async function applyLogFilter() {
+  const q = $('#log-q').value.trim();
+  const level = $('#log-level').value;
+  logFilterOn = !!(q || level);
+  $('#log-clear').hidden = !logFilterOn;
+
+  if (!logFilterOn) {
+    // 只重绘控制台;走 appendLog 会连仪表盘的迷你日志一起再追加一遍
+    $('#log-count').textContent = '';
+    const logs = await iapi('/logs');
+    $('#console').innerHTML = logs.map(logLineHtml).join('');
+    $('#console').scrollTop = $('#console').scrollHeight;
+    return;
+  }
+  const qs = new URLSearchParams({ limit: '1000' });
+  if (q) qs.set('q', q);
+  if (level) qs.set('level', level);
+  const d = await iapi(`/logs?${qs}`);
+  if (!d.ok) return toast(d.error || '搜索失败', true);
+  $('#log-count').textContent = `命中 ${d.total} 行 / 缓冲 ${d.buffered} 行`
+    + (d.total > d.lines.length ? `(只显示最近 ${d.lines.length} 行)` : '');
+  $('#console').innerHTML = d.lines.map(logLineHtml).join('') || '<div class="dim">没有匹配的日志</div>';
+  $('#console').scrollTop = $('#console').scrollHeight;
+}
+
+const debouncedLogFilter = (() => {
+  let t = null;
+  return () => { clearTimeout(t); t = setTimeout(applyLogFilter, 250); };
+})();
+
+$('#log-q').addEventListener('input', debouncedLogFilter);
+$('#log-level').addEventListener('change', applyLogFilter);
+$('#log-clear').addEventListener('click', () => {
+  $('#log-q').value = '';
+  $('#log-level').value = '';
+  applyLogFilter();
+});
+$('#log-download').addEventListener('click', () => {
+  const qs = new URLSearchParams();
+  if ($('#log-q').value.trim()) qs.set('q', $('#log-q').value.trim());
+  if ($('#log-level').value) qs.set('level', $('#log-level').value);
+  const a = document.createElement('a');
+  a.href = `/api/instances/${currentIid}/logs/download${qs.toString() ? '?' + qs : ''}`;
+  a.click();
+  toast(logFilterOn ? '正在下载(仅当前筛选结果)' : '正在下载完整控制台日志');
+});
+
 function appendLog(entry) {
-  for (const [sel, cap] of [['#console', 400], ['#dash-log', 80]]) {
+  // 筛选生效时别把实时日志混进结果里 —— 但仪表盘的迷你日志不受筛选影响,照常追加
+  const targets = logFilterOn ? [['#dash-log', 80]] : [['#console', 400], ['#dash-log', 80]];
+  for (const [sel, cap] of targets) {
     const el = $(sel);
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     el.insertAdjacentHTML('beforeend', logLineHtml(entry));

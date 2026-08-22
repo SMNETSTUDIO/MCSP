@@ -313,7 +313,46 @@ router.delete('/:iid', asyncHandler(async (req, res) => {
 /* ── 状态 / 日志 / 指标 / 进程控制 / 命令 ── */
 
 router.get('/:iid/status', (req, res) => res.json(req.inst.snapshot()));
-router.get('/:iid/logs', (req, res) => res.json(req.inst.logs.slice(-300)));
+/**
+ * 控制台日志。默认回最后 300 行(前端首屏),支持:
+ *   ?q=关键词   大小写不敏感的子串匹配
+ *   ?level=ERROR,WARN  只看这些级别
+ *   ?limit=N    最多回多少行(上限就是缓冲区大小)
+ * 过滤在整个缓冲区上做,而不是先截 300 行再过滤 —— 否则搜"半小时前那条报错"永远搜不到。
+ */
+function filterLogs(inst, { q, level, limit }) {
+  let out = inst.logs;
+  if (level) {
+    const want = new Set(String(level).toUpperCase().split(',').map((x) => x.trim()).filter(Boolean));
+    if (want.size) out = out.filter((l) => want.has(String(l.level).toUpperCase()));
+  }
+  if (q) {
+    const needle = String(q).toLowerCase();
+    out = out.filter((l) => l.message.toLowerCase().includes(needle));
+  }
+  const n = Math.min(inst.logs.length, Math.max(1, parseInt(limit, 10) || 300));
+  return { total: out.length, lines: out.slice(-n) };
+}
+
+router.get('/:iid/logs', (req, res) => {
+  const { q, level, limit } = req.query;
+  // 没带任何查询参数时保持老行为(裸数组),前端首屏和冒烟用例都依赖它
+  if (!q && !level && !limit) return res.json(req.inst.logs.slice(-300));
+  res.json({ ok: true, buffered: req.inst.logs.length, ...filterLogs(req.inst, { q, level, limit }) });
+});
+
+/* 下载完整控制台缓冲为纯文本 —— 排查崩溃时要贴给别人看 */
+router.get('/:iid/logs/download', (req, res) => {
+  const inst = req.inst;
+  const { lines } = filterLogs(inst, { q: req.query.q, level: req.query.level, limit: inst.logs.length });
+  const body = lines.map((l) => `[${l.time}] [${l.level}] ${l.message}`).join('\n') + '\n';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const ascii = `mcsp-${inst.id}-${stamp}.log`;
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${inst.name}-${stamp}.log`)}`);
+  res.send(body);
+});
 router.get('/:iid/metrics/history', (req, res) => res.json(req.inst.metricsHistory));
 
 router.post('/:iid/server/:action', (req, res) => {
