@@ -1333,6 +1333,7 @@ async function loadOauthConfig() {
   $('#og-lim-inst').value = dl.maxInstances || 1;
   $('#og-lim-mem').value = dl.maxMemMB || 2048;
   $('#og-lim-cpu').value = dl.maxCpuCores || 2;
+  $('#og-lim-disk').value = dl.maxDiskMB ?? 20480;
 }
 
 $('#og-save').addEventListener('click', async () => {
@@ -1347,6 +1348,7 @@ $('#og-save').addEventListener('click', async () => {
         maxInstances: $('#og-lim-inst').value,
         maxMemMB: $('#og-lim-mem').value,
         maxCpuCores: $('#og-lim-cpu').value,
+        maxDiskMB: $('#og-lim-disk').value,
       },
     },
   });
@@ -1379,7 +1381,7 @@ async function loadUsers() {
           ${u.defaultPassword ? '<span class="task-badge off" style="color:#ffe479;border-color:rgba(255,214,10,0.4)">默认密码未修改</span>' : ''}
         </div>
         <div class="backup-meta">${u.limits
-          ? `实例 ${u.usage.instances}/${u.limits.maxInstances} · 内存 ${u.usage.memMB}/${u.limits.maxMemMB} MB · CPU ${u.limits.maxCpuCores} 核 · `
+          ? `实例 ${u.usage.instances}/${u.limits.maxInstances} · 内存 ${u.usage.memMB}/${u.limits.maxMemMB} MB · CPU ${u.limits.maxCpuCores} 核 · 磁盘 ${u.usage.diskMB}/${u.limits.maxDiskMB || '∞'} MB · `
           : `实例 ${u.usage.instances} · 不受配额限制 · `}创建于 ${fmtAgo(u.createdAt)}</div>
       </div>
       <div class="spacer"></div>
@@ -1410,11 +1412,12 @@ $('#user-create').addEventListener('click', async () => {
         maxInstances: $('#user-lim-inst').value,
         maxMemMB: $('#user-lim-mem').value,
         maxCpuCores: $('#user-lim-cpu').value,
+        maxDiskMB: $('#user-lim-disk').value,
       },
     },
   });
   if (r.ok) {
-    ['user-name', 'user-pass', 'user-lim-inst', 'user-lim-mem', 'user-lim-cpu'].forEach((id) => { $('#' + id).value = ''; });
+    ['user-name', 'user-pass', 'user-lim-inst', 'user-lim-mem', 'user-lim-cpu', 'user-lim-disk'].forEach((id) => { $('#' + id).value = ''; });
     toast('用户已创建');
     loadUsers();
   } else toast(r.error, true);
@@ -1426,7 +1429,10 @@ $('#lim-cancel').addEventListener('click', () => { $('#limits-modal').hidden = t
 $('#lim-ok').addEventListener('click', async () => {
   const r = await api(`/users/${encodeURIComponent(limitsTarget)}/limits`, {
     method: 'PUT',
-    body: { maxInstances: $('#lim-inst').value, maxMemMB: $('#lim-mem').value, maxCpuCores: $('#lim-cpu').value },
+    body: {
+      maxInstances: $('#lim-inst').value, maxMemMB: $('#lim-mem').value,
+      maxCpuCores: $('#lim-cpu').value, maxDiskMB: $('#lim-disk').value,
+    },
   });
   if (r.ok) { $('#limits-modal').hidden = true; toast('配额已更新'); loadUsers(); }
   else toast(r.error, true);
@@ -1443,6 +1449,7 @@ $('#user-list').addEventListener('click', async (e) => {
     $('#lim-inst').value = lim.maxInstances;
     $('#lim-mem').value = lim.maxMemMB;
     $('#lim-cpu').value = lim.maxCpuCores;
+    $('#lim-disk').value = lim.maxDiskMB ?? 20480;
     $('#limits-modal').hidden = false;
   } else if (uact === 'del') {
     if (!confirm(`删除用户 ${name} ?`)) return;

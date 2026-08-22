@@ -3,6 +3,7 @@ const os = require('os');
 const express = require('express');
 const { users, saveUsers, hashPassword, requireAdmin, dropUserSessions } = require('../auth');
 const { instances } = require('../registry');
+const disk = require('../disk');
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -16,13 +17,18 @@ function sanitizeLimits(l) {
     maxInstances: clamp(parseInt(l.maxInstances, 10) || 1, 1, 12),
     maxMemMB: clamp(parseInt(l.maxMemMB, 10) || 2048, 512, 65536),
     maxCpuCores: clamp(parseInt(l.maxCpuCores, 10) || 2, 1, os.cpus().length),
+    // 0 = 不限;默认 20 GB,够放一个世界加若干备份。
+    // 不能写 `parseInt(x) ?? 20480` —— parseInt 给的是 NaN,?? 只拦 null/undefined
+    maxDiskMB: Number.isFinite(parseInt(l.maxDiskMB, 10))
+      ? clamp(parseInt(l.maxDiskMB, 10), 0, 4194304)
+      : 20480,
   };
 }
 
 /** 某用户当前占用:实例数与内存(xmx 之和) */
 function usageOf(username) {
   const mine = [...instances.values()].filter((i) => i.owner === username);
-  return { instances: mine.length, memMB: mine.reduce((s, i) => s + i.xmx, 0) };
+  return { instances: mine.length, memMB: mine.reduce((s, i) => s + i.xmx, 0), diskMB: disk.userUsageMB(username) };
 }
 
 router.get('/', (req, res) => {

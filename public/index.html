@@ -451,8 +451,9 @@
             <input id="user-lim-inst" type="number" min="1" max="12" placeholder="实例数上限(默认 1)" />
             <input id="user-lim-mem" type="number" min="512" max="65536" step="256" placeholder="内存配额 MB(默认 2048)" />
             <input id="user-lim-cpu" type="number" min="1" placeholder="CPU 核数(默认 2)" />
+            <input id="user-lim-disk" type="number" min="0" step="1024" placeholder="磁盘配额 MB(默认 20480,0=不限)" />
           </div>
-          <div class="dim small" style="margin-top:10px">普通用户的实例互相隔离(只有管理员能看到全部);内存为其全部实例 -Xmx 之和的上限,CPU 为启动时绑定的核数(taskset)。管理员不受限。</div>
+          <div class="dim small" style="margin-top:10px">普通用户的实例互相隔离(只有管理员能看到全部);内存为其全部实例 -Xmx 之和的上限,CPU 为启动时绑定的核数(taskset),磁盘为其全部实例目录 + 备份的体积上限(上传/解压/打包/备份时校验)。管理员不受限。</div>
         </div>
         <div class="card glass" style="margin-top:18px">
           <div class="card-title">用户列表 <span class="dim small" id="user-count"></span></div>
@@ -513,6 +514,7 @@
             <div class="prop-row"><label>建号配额:实例数上限</label><input id="og-lim-inst" type="number" min="1" max="12" /></div>
             <div class="prop-row"><label>建号配额:内存 MB(全部实例 -Xmx 之和)</label><input id="og-lim-mem" type="number" min="512" max="65536" step="256" /></div>
             <div class="prop-row"><label>建号配额:CPU 核数</label><input id="og-lim-cpu" type="number" min="1" /></div>
+            <div class="prop-row"><label>建号配额:磁盘 MB(0 = 不限)</label><input id="og-lim-disk" type="number" min="0" step="1024" /></div>
           </div>
           <div class="dim small" style="margin-top:14px">
             标准 OAuth2 授权码流程;在提供商侧登记的回调地址为 <code>&lt;面板地址&gt;/api/auth/oauth/callback</code>。
@@ -535,6 +537,8 @@
         <input id="lim-mem" type="number" min="512" max="65536" step="256" />
         <label class="dim small">CPU 核数(实例启动时绑定,重启生效)</label>
         <input id="lim-cpu" type="number" min="1" />
+        <label class="dim small">磁盘配额(实例目录 + 备份,MB;0 = 不限)</label>
+        <input id="lim-disk" type="number" min="0" step="1024" />
       </div>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="lim-cancel">取消</button>

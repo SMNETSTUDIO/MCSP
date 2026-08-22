@@ -74,6 +74,23 @@ function userUsageMB(username) {
   return Math.round(total);
 }
 
+/**
+ * 写入成功后立刻把增量记到缓存上。
+ * 这条是配额能生效的关键 —— 只靠 60s 的定时扫描的话,用户能在两次扫描之间
+ * 连传十几个大文件,每次看到的都是同一个"还没超"的旧数字。
+ * 记多了不要紧,下一轮扫描会纠正回来。
+ */
+function bump(iid, deltaMB, kind = 'inst') {
+  // 缓存里还没有这个实例(刚建出来、后台还没扫到)时要**建一条**而不是直接返回:
+  // 否则新实例在第一次扫描前是配额盲区,能一口气传爆配额。
+  // 从 0 起算会短暂少报已有内容,下一轮扫描会纠正。
+  let u = usage.get(iid);
+  if (!u) { u = { instMB: 0, backupMB: 0, totalMB: 0, at: 0 }; usage.set(iid, u); }
+  const key = kind === 'backup' ? 'backupMB' : 'instMB';
+  u[key] = Math.max(0, +(u[key] + deltaMB).toFixed(1));
+  u.totalMB = +(u.instMB + u.backupMB).toFixed(1);
+}
+
 /** 立刻重算某个实例(删除大文件、跑完备份后调用,免得等一整个扫描周期) */
 async function refresh(iid) {
   const { instances } = require('./registry');
@@ -82,4 +99,4 @@ async function refresh(iid) {
   try { usage.set(iid, await measure(inst)); } catch {}
 }
 
-module.exports = { hostDisk, startDiskLoop, instanceUsage, userUsageMB, refresh };
+module.exports = { hostDisk, startDiskLoop, instanceUsage, userUsageMB, bump, refresh };

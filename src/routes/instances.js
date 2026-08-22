@@ -8,6 +8,7 @@ const express = require('express');
 const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB } = require('../config');
 const { asyncHandler, dirSize } = require('../utils');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
+const disk = require('../disk');
 const { users: authUsers } = require('../auth');
 const { Instance } = require('../instance');
 const { instances, saveRegistry, installInstance } = require('../registry');
@@ -80,6 +81,28 @@ router.param('iid', (req, res, next, iid) => {
 const visibleInstances = (req) =>
   [...instances.values()].filter((i) => req.user.role === 'admin' || i.owner === req.user.username);
 
+/**
+ * 普通用户的磁盘配额:还能再写多少 MB(Infinity = 不限)。
+ * 数字来自 disk.js 的后台缓存,所以每个写入路径成功后都要 disk.bump() 把
+ * 增量立刻记回去 —— 否则用户能在两次扫描之间连传十几个大文件,每次读到的
+ * 都是同一个"还没超"的旧数字。
+ */
+function diskRemainingMB(req) {
+  if (req.user.role === 'admin') return Infinity;
+  const u = authUsers.find((x) => x.username === req.user.username);
+  const max = u && u.limits ? u.limits.maxDiskMB : 0;
+  if (!max) return Infinity;                       // 0 / 未设置 = 不限
+  return Math.max(0, max - disk.userUsageMB(req.user.username));
+}
+
+/** 需要 needMB 空间时的报错文案;够用返回 null */
+function diskQuotaError(req, needMB) {
+  const left = diskRemainingMB(req);
+  if (left === Infinity || needMB <= left) return null;
+  const u = authUsers.find((x) => x.username === req.user.username);
+  return `磁盘配额不足:本次约需 ${needMB.toFixed(0)} MB,剩余 ${left.toFixed(0)} MB(配额 ${u.limits.maxDiskMB} MB)`;
+}
+
 /** 普通用户的配额检查;extraMB 为本次新增的内存需求(排除 excludeInst 自身占用) */
 function quotaError(req, extraMB, newInstance, excludeInst) {
   if (req.user.role === 'admin') return null;
@@ -125,6 +148,7 @@ router.post('/', (req, res) => {
   });
   fs.mkdirSync(inst.dir, { recursive: true });
   instances.set(id, inst);
+  disk.refresh(id);          // 立刻纳入磁盘统计,别等下一轮后台扫描才开始算配额
   saveRegistry();
   bus.broadcast('instances', {});
   res.json({ ok: true, instance: inst.snapshot() });
@@ -329,7 +353,11 @@ router.post('/:iid/plugins/:id/toggle', (req, res) => {
 router.get('/:iid/backups', (req, res) => res.json(listBackups(req.inst)));
 
 router.post('/:iid/backups', asyncHandler(async (req, res) => {
+  // 备份是实例目录的 tar.gz,压完只会更小,拿目录体积做保守预检
+  const dqerr = diskQuotaError(req, disk.instanceUsage(req.inst.id).instMB);
+  if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
   const r = await createBackup(req.inst, req.body && req.body.name);
+  disk.refresh(req.inst.id);      // 保留策略可能顺手删了旧包,增量算不准,直接重算
   res.json(r.ok ? { ok: true, backups: listBackups(req.inst) } : r);
 }));
 
@@ -355,6 +383,7 @@ router.delete('/:iid/backups/:id', (req, res) => {
   const file = path.join(backupDir(req.inst), req.params.id);
   if (!fs.existsSync(file)) return res.status(404).json({ ok: false, error: '备份不存在' });
   fs.unlinkSync(file);
+  disk.refresh(req.inst.id);
   req.inst.log('INFO', `[MCSP] 已删除备份 ${req.params.id}`);
   res.json({ ok: true });
 });
@@ -500,10 +529,13 @@ router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
     if (fs.statSync(dest).isDirectory()) return res.status(409).json({ ok: false, error: '同名目录已存在' });
   }
 
-  const max = MAX_UPLOAD_MB * 1048576;
+  // 配额直接压进流式上限:超额时不用等收完整个文件再拒,写到界就断
+  const quotaLeft = diskRemainingMB(req);
+  const max = Math.min(MAX_UPLOAD_MB * 1048576, quotaLeft === Infinity ? Infinity : quotaLeft * 1048576);
   const declared = parseInt(req.headers['content-length'], 10);
   if (Number.isFinite(declared) && declared > max) {
-    return res.status(413).json({ ok: false, error: `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
+    const qerr = diskQuotaError(req, declared / 1048576);
+    return res.status(413).json({ ok: false, error: qerr || `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
   }
 
   // 先写临时文件再 rename:上传中断不会在目录里留下半截的同名文件
@@ -516,13 +548,15 @@ router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
     if (err.tooLarge) {
       // 响应发出后直接断连:剩下的字节可能还有好几 GB,没必要收完再丢
       res.on('finish', () => req.destroy());
-      return res.status(413).json({ ok: false, error: `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
+      const qerr = diskQuotaError(req, max / 1048576 + 1);
+      return res.status(413).json({ ok: false, error: qerr || `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
     }
     if (res.headersSent || req.destroyed) return;   // 客户端自己断的,没人在等这个响应
     return res.status(400).json({ ok: false, error: `上传失败: ${err.message}` });
   }
   await fsp.rename(tmp, dest);
 
+  disk.bump(req.inst.id, size / 1048576);
   const rel = path.posix.join(String(req.query.path || '/'), name);
   req.inst.log('INFO', `[MCSP] 已上传: ${rel} (${(size / 1048576).toFixed(2)} MB)`);
   if (name === 'server.properties') req.inst.invalidatePropsCache();
@@ -533,6 +567,7 @@ router.delete('/:iid/files', asyncHandler(async (req, res) => {
   const p = safePath(req.inst, req.query.path);
   if (!p || p === req.inst.dir) return res.status(400).json({ ok: false, error: '非法路径' });
   await fsp.rm(p, { recursive: true, force: true });
+  disk.refresh(req.inst.id);      // 删的可能是个大目录,不重算用户会被旧数字白白挡着
   req.inst.log('INFO', `[MCSP] 已删除: ${req.query.path}`);
   res.json({ ok: true });
 }));
@@ -584,7 +619,10 @@ router.post('/:iid/files/extract', asyncHandler(async (req, res) => {
   inst.log('INFO', `[MCSP] 开始解压 ${rel} → ${shown}`);
   try {
     await fsp.mkdir(dest, { recursive: true });
-    const r = await extractArchive(src, dest, MAX_EXTRACT_MB * 1048576);
+    const left = diskRemainingMB(req);
+    const cap = Math.min(MAX_EXTRACT_MB * 1048576, left === Infinity ? Infinity : left * 1048576);
+    const r = await extractArchive(src, dest, cap);
+    disk.bump(inst.id, r.bytes / 1048576);
     inst.log('INFO', `[MCSP] 解压完成: ${rel} → ${shown} (${r.files} 个文件, ${(r.bytes / 1048576).toFixed(1)} MB)`);
     inst.invalidatePropsCache();      // 整合包/世界包里常带 server.properties
     res.json({ ok: true, ...r });
@@ -622,6 +660,13 @@ router.post('/:iid/files/archive', asyncHandler(async (req, res) => {
   const out = path.join(parent, outName);
   if (fs.existsSync(out)) return res.status(409).json({ ok: false, error: `${outName} 已存在` });
 
+  // 压缩包不会比原始内容更大,拿输入体积做保守预检
+  const inputMB = names.reduce((s, n) => {
+    try { return s + fs.statSync(path.join(parent, n)).size / 1048576; } catch { return s; }
+  }, 0);
+  const dqerr = diskQuotaError(req, inputMB);
+  if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
+
   if (archiveBusy.has(inst.id)) return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
   archiveBusy.add(inst.id);
   // 先写到临时名再改回来:打包途中它不会被 tar 自己扫进去,中断也不会留下半个能点开的包
@@ -631,6 +676,7 @@ router.post('/:iid/files/archive', asyncHandler(async (req, res) => {
     const r = await createArchive(tmp, parent, names, fmt);
     await fsp.rename(tmp, out);
     const size = (await fsp.stat(out)).size;
+    disk.bump(inst.id, size / 1048576);
     inst.log('INFO', `[MCSP] 打包完成: ${outName} (${r.files} 个文件, ${(size / 1048576).toFixed(1)} MB)`);
     res.json({ ok: true, name: outName, files: r.files, size });
   } catch (err) {
