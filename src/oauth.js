@@ -172,7 +172,7 @@ router.get('/callback', async (req, res) => {
     if (!user) {
       return failTo(res, `该 ${config.providerName || 'OAuth'} 账号未绑定面板用户;请先用密码登录,在「修改密码」弹窗中绑定`);
     }
-    setSessionCookie(res, auth.createSession(user.username));
+    setSessionCookie(res, auth.createSession(user.username, req));
     res.redirect('/');
   } catch (err) {
     failTo(res, `OAuth 登录失败: ${err.message}`);

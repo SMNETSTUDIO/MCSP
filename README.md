@@ -28,7 +28,7 @@ from that process. No Java pre-install, no public IP required.
 
 | 中文 | English |
 |------|---------|
-| 🔐 scrypt 哈希 + HttpOnly 会话 + 登录限速;**自定义 OAuth2 登录**(任意提供商,自动建号/绑定,state 防 CSRF) | scrypt hashing + HttpOnly sessions + login rate-limit; **custom OAuth2 login** (any provider, auto-register/bind, CSRF-safe state) |
+| 🔐 scrypt 哈希 + HttpOnly 会话 + **持久化**登录限速;**API Token**(Bearer,存摘要)、**活跃会话管理**(看设备/踢单个/退出其它);**自定义 OAuth2 登录**(任意提供商,自动建号/绑定,state 防 CSRF) | scrypt hashing + HttpOnly sessions + login rate-limit; **custom OAuth2 login** (any provider, auto-register/bind, CSRF-safe state) |
 | 📦 10 种服务端官方源安装:Paper / Purpur / Folia / Vanilla / Fabric / Forge / NeoForge / Velocity / Waterfall / BungeeCord,新老版本全支持 | 10 server types from official sources; Forge/NeoForge run the official installer; legacy versions supported (Vanilla back to 1.2.5) |
 | ⚙ 实例可**改名/换图标**、**换服务端类型 / 升降级 MC 版本**(世界·插件·配置全保留,重装前自动备份)、**一键克隆**(自动分配空闲端口);**自定义 JVM 参数**(一键填入 Aikar's Flags),`-Xmx` 仍由配额统一管控 | Rename/re-icon instances, **switch server type or MC version in place** (worlds, plugins and config all kept, auto-backup first), **one-click clone** (free port auto-assigned); **custom JVM flags** with one-click Aikar's Flags, while `-Xmx` stays under quota control |
 | ☕ 面板内**一键安装 Java**(Temurin 25/21/17/8),按 MC 版本自动匹配运行时 | **One-click Java install** (Temurin 25/21/17/8), auto-matched to the MC version |
