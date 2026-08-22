@@ -72,7 +72,7 @@ function receiveUpload(req, dest, max) {
 /* :iid 统一解析;非管理员只能访问自己的实例(404 不泄露存在性) */
 router.param('iid', (req, res, next, iid) => {
   const inst = instances.get(iid);
-  if (!inst || (req.user.role !== 'admin' && inst.owner !== req.user.username)) {
+  if (!inst || !inst.canAccess(req.user)) {
     return res.status(404).json({ ok: false, error: '实例不存在' });
   }
   req.inst = inst;
@@ -80,8 +80,10 @@ router.param('iid', (req, res, next, iid) => {
 });
 
 /** 当前用户可见的实例:管理员全量,普通用户仅自己名下 */
-const visibleInstances = (req) =>
-  [...instances.values()].filter((i) => req.user.role === 'admin' || i.owner === req.user.username);
+const visibleInstances = (req) => [...instances.values()].filter((i) => i.canAccess(req.user));
+
+/** 主人或管理员 —— 删实例、改协作者这类"所有权级"操作用它,协作者不够格 */
+const isOwnerOrAdmin = (req, inst) => req.user.role === 'admin' || inst.owner === req.user.username;
 
 /**
  * 普通用户的磁盘配额:还能再写多少 MB(Infinity = 不限)。
@@ -267,6 +269,27 @@ router.post('/:iid/clone', asyncHandler(async (req, res) => {
   res.json({ ok: true, instance: inst.snapshot(), port });
 }));
 
+/* 协作者:主人或管理员可增删。协作者能操作实例,但不能删实例、也不能改这份名单 */
+router.put('/:iid/collaborators', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  if (!isOwnerOrAdmin(req, inst)) return res.status(403).json({ ok: false, error: '只有实例主人可以管理协作者' });
+  const list = Array.isArray(req.body && req.body.users) ? req.body.users : null;
+  if (!list) return res.status(400).json({ ok: false, error: '缺少 users 数组' });
+  if (list.length > 20) return res.status(400).json({ ok: false, error: '协作者最多 20 人' });
+
+  const names = [...new Set(list.map((x) => String(x).trim()).filter(Boolean))];
+  for (const n of names) {
+    if (!authUsers.some((u) => u.username === n)) return res.status(400).json({ ok: false, error: `用户不存在: ${n}` });
+    if (n === inst.owner) return res.status(400).json({ ok: false, error: '主人本来就有权限,不用加成协作者' });
+  }
+  inst.collaborators = names;
+  saveRegistry();
+  inst.log('INFO', `[MCSP] 协作者已更新: ${names.length ? names.join(', ') : '(已清空)'}`);
+  inst.emitState();
+  bus.broadcast('instances', {});
+  res.json({ ok: true, collaborators: names });
+}));
+
 /* 重装 / 升级:换服务端 jar,保留世界与全部配置。默认先自动备份一份。 */
 router.post('/:iid/reinstall', asyncHandler(async (req, res) => {
   const inst = req.inst;
@@ -297,6 +320,7 @@ router.post('/:iid/reinstall', asyncHandler(async (req, res) => {
 /* 删除实例:实例主人或管理员(param 层已做归属校验) */
 router.delete('/:iid', asyncHandler(async (req, res) => {
   const inst = req.inst;
+  if (!isOwnerOrAdmin(req, inst)) return res.status(403).json({ ok: false, error: '只有实例主人可以删除实例' });
   if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再删除' });
   inst.cancelAutoRestart();     // 否则实例都删了,几秒后那个定时器还会来拉一次
   if (inst.tunnelProc) inst.stopTunnel();

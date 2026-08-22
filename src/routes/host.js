@@ -15,7 +15,7 @@ router.get('/host', asyncHandler(async (req, res) => {
   const cpus = os.cpus();
   const javaVersion = java.bestJavaVersionLine();
   // 实例计数只统计当前用户可见的(普通用户之间互相隔离)
-  const visible = [...instances.values()].filter((i) => req.user.role === 'admin' || i.owner === req.user.username);
+  const visible = [...instances.values()].filter((i) => i.canAccess(req.user));
   res.json({
     hostname: os.hostname(),
     platform: `${os.type()} ${os.release()}`,

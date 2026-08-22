@@ -1181,6 +1181,43 @@ async function fmArchive(format) {
   loadFiles(fmPath);
 }
 
+/* ── 协作者 ── */
+
+function renderCollab(status) {
+  const mine = me && (me.role === 'admin' || me.username === status.owner);
+  $('#collab-card').hidden = !mine;          // 协作者自己看不到也改不了这张卡
+  if (!mine) return;
+  $('#collab-owner').textContent = `主人:${status.owner}`;
+  const list = status.collaborators || [];
+  $('#collab-list').innerHTML = list.length
+    ? list.map((n) => `<span class="tag">${escapeHtml(n)}<button data-cbdel="${escapeHtml(n)}" title="移除">×</button></span>`).join('')
+    : '<div class="empty">还没有协作者。加一个面板用户,他就能和你一起管这个实例。</div>';
+}
+
+async function saveCollab(users) {
+  const r = await iapi('/collaborators', { method: 'PUT', body: { users } });
+  if (!r.ok) return toast(r.error, true);
+  const st = instMap.get(currentIid);
+  if (st) st.collaborators = r.collaborators;
+  renderCollab({ owner: st ? st.owner : '', collaborators: r.collaborators });
+  toast('协作者已更新');
+}
+
+$('#cb-add').addEventListener('click', () => {
+  const n = $('#cb-input').value.trim();
+  if (!n) return;
+  const cur = (instMap.get(currentIid) || {}).collaborators || [];
+  if (cur.includes(n)) return toast('已经在名单里了', true);
+  $('#cb-input').value = '';
+  saveCollab([...cur, n]);
+});
+$('#collab-list').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cbdel]');
+  if (!b) return;
+  const cur = (instMap.get(currentIid) || {}).collaborators || [];
+  saveCollab(cur.filter((x) => x !== b.dataset.cbdel));
+});
+
 /* ── 服务器图标 ── */
 
 async function loadServerIcon() {
@@ -1219,6 +1256,7 @@ $('#ic-input').addEventListener('change', async (e) => {
   }
   toast('图标已更新,重启实例后生效');
   loadServerIcon();
+  renderCollab(status);
 });
 
 $('#ic-del').addEventListener('click', async () => {
@@ -1695,6 +1733,7 @@ async function loadProperties() {
   loadReinstall(status);
   loadConfigs();
   loadServerIcon();
+  renderCollab(status);
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);

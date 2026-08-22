@@ -56,7 +56,7 @@ app.get('/api/stream', (req, res) => {
   });
   res.mcspUser = { username: req.user.username, role: req.user.role };   // SSE 按归属过滤
   for (const inst of registry.instances.values()) {
-    if (req.user.role !== 'admin' && inst.owner !== req.user.username) continue;
+    if (!inst.canAccess(req.user)) continue;
     res.write(`event: state\ndata: ${JSON.stringify(inst.snapshot())}\n\n`);
   }
   bus.subscribers.add(res);

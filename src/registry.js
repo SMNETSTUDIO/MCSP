@@ -24,7 +24,10 @@ function loadRegistry() {
     const inst = new Instance(meta);
     if (fs.existsSync(inst.dir)) instances.set(inst.id, inst);
   }
-  bus.resolveOwner = (iid) => { const i = instances.get(iid); return i ? i.owner : null; };
+  bus.resolveAllowed = (iid) => {
+    const i = instances.get(iid);
+    return i ? [i.owner, ...i.collaborators] : null;
+  };
   saveRegistry();
 }
 

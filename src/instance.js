@@ -93,6 +93,9 @@ class Instance {
     this.name = meta.name;
     this.icon = meta.icon || '🌳';
     this.owner = meta.owner || 'admin';                   // 归属用户;旧实例默认归管理员
+    // 协作者:能操作这个实例,但不能删实例、也不能改协作者名单。
+    // 配额始终算在 owner 头上 —— 否则拉个小号当协作者就能绕开自己的配额
+    this.collaborators = Array.isArray(meta.collaborators) ? meta.collaborators.filter((x) => typeof x === 'string') : [];
     this.type = TYPES[meta.type] ? meta.type : 'paper';   // 旧实例无 type,默认 paper
     this.version = meta.version;
     this.jar = meta.jar;
@@ -135,7 +138,7 @@ class Instance {
   }
 
   meta() {
-    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, autoStart: this.autoStart, wasRunning: this.wasRunning, jvmArgs: this.jvmArgs, createdAt: this.createdAt, tunnel: this.tunnel };
+    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, collaborators: this.collaborators, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, autoStart: this.autoStart, wasRunning: this.wasRunning, jvmArgs: this.jvmArgs, createdAt: this.createdAt, tunnel: this.tunnel };
   }
 
   snapshot() {
@@ -145,6 +148,7 @@ class Instance {
       icon: this.icon,
       type: this.type,
       owner: this.owner,
+      collaborators: this.collaborators,
       state: this.state,
       installProgress: this.installProgress,
       version: this.version,
@@ -164,6 +168,12 @@ class Instance {
       pid: this.proc ? this.proc.pid : null,
       tunnel: { type: this.tunnel.type, state: this.tunnelState, addr: this.tunnelAddr, error: this.tunnelError, claim: this.tunnelClaim },
     };
+  }
+
+  /** 谁能操作这个实例:管理员、主人、协作者 */
+  canAccess(user) {
+    if (!user) return false;
+    return user.role === 'admin' || user.username === this.owner || this.collaborators.includes(user.username);
   }
 
   /* ── logging ── */

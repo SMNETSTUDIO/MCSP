@@ -80,7 +80,16 @@ router.delete('/:name', (req, res) => {
   users.splice(i, 1);
   dropUserSessions(name);
   saveUsers();
-  res.json({ ok: true });
+  // 从所有实例的协作者名单里摘掉,否则会残留一个已不存在的用户名
+  const { saveRegistry } = require('../registry');
+  let touched = 0;
+  for (const inst of instances.values()) {
+    if (!inst.collaborators.includes(name)) continue;
+    inst.collaborators = inst.collaborators.filter((c) => c !== name);
+    touched++;
+  }
+  if (touched) saveRegistry();
+  res.json({ ok: true, removedFromInstances: touched });
 });
 
 router.put('/:name/password', (req, res) => {
