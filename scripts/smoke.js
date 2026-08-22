@@ -187,6 +187,16 @@ async function archiveRoundtrip() {
   r = await req('GET', '/api/instances/not-exist/status');
   check('404 instance', r.status === 404);
 
+  // 畸形 JSON 应该是 400(客户端错),不是 500
+  {
+    const res = await fetch(BASE + '/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: '{"broken":',
+    });
+    check('malformed JSON → 400', res.status === 400, String(res.status));
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })().catch((e) => { console.error('smoke crashed:', e); process.exit(1); });

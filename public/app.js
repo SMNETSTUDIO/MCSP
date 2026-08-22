@@ -1269,6 +1269,8 @@ const BOOL_PROPS = new Set(['pvp', 'online-mode', 'white-list', 'allow-nether', 
 async function loadProperties() {
   const [props, status] = await Promise.all([iapi('/properties'), iapi('/status')]);
   instMap.set(status.id, status);
+  $('#cfg-name').value = status.name || '';
+  $('#cfg-icon').value = status.icon || '🌳';
   $('#cfg-xmx').value = status.xmx || 2048;
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
@@ -1295,7 +1297,9 @@ $('#inst-cfg-save').addEventListener('click', async () => {
   if (yggEnabled && !/^https?:\/\/.+/.test(yggUrl)) return toast('启用外置登录需填写 Yggdrasil API 地址(http(s) URL)', true);
   const btn = $('#inst-cfg-save');
   btn.disabled = true;
-  const r = await iapi('', { method: 'PATCH', body: { xmx: mb, autoRestart: $('#cfg-autorestart').checked, autoStart: $('#cfg-autostart').checked, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
+  const name = $('#cfg-name').value.trim();
+  if (!name) return toast('实例名称不能为空', true);
+  const r = await iapi('', { method: 'PATCH', body: { name, icon: $('#cfg-icon').value, xmx: mb, autoRestart: $('#cfg-autorestart').checked, autoStart: $('#cfg-autostart').checked, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
   btn.disabled = false;
   if (r.ok) {
     instMap.set(r.instance.id, r.instance);

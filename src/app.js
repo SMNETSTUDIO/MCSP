@@ -78,11 +78,17 @@ app.use(express.static(PUBLIC_DIR, {
   },
 }));
 
-/* 全局错误兜底:异步路由抛错返回 500 JSON 而不是打崩进程 */
+/* 全局错误兜底:异步路由抛错返回 JSON 而不是打崩进程。
+   express.json 对畸形 body 抛的错自带 status 400 —— 别一律当 500 报,
+   那会把"你的请求体不合法"说成"服务器坏了"。 */
 app.use((err, req, res, next) => {   // eslint-disable-line no-unused-vars
-  console.error('[MCSP] 未捕获的路由错误:', err);
+  const status = err.status || err.statusCode || 500;
+  if (status >= 500) console.error('[MCSP] 未捕获的路由错误:', err);
   if (res.headersSent) return;
-  res.status(500).json({ ok: false, error: `服务器内部错误: ${err.message}` });
+  res.status(status).json({
+    ok: false,
+    error: status === 400 ? `请求体格式错误: ${err.message}` : `服务器内部错误: ${err.message}`,
+  });
 });
 
 /* 优雅退出:先让所有子服 save-all 落盘 */

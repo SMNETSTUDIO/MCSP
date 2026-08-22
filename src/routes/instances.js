@@ -178,6 +178,21 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     }
   }
 
+  if (body.name !== undefined) {
+    const name = String(body.name).trim().slice(0, 40);
+    if (!name) return res.status(400).json({ ok: false, error: '实例名称不能为空' });
+    if (name !== inst.name) {
+      inst.log('INFO', `[MCSP] 实例已改名: ${inst.name} → ${name}`);
+      inst.name = name;
+    }
+  }
+
+  if (body.icon !== undefined) {
+    // 只是个显示用的 emoji,限长 + 挡掉控制字符就够,不必枚举白名单
+    const icon = String(body.icon).replace(/[\x00-\x1f]/g, '').trim().slice(0, 8);
+    if (icon) inst.icon = icon;
+  }
+
   if (body.autoRestart !== undefined) {
     const on = !!body.autoRestart;
     if (on !== inst.autoRestart) {

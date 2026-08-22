@@ -122,7 +122,7 @@ server.js              入口 entry (10 lines)
 src/                   后端分层模块 backend modules
 public/                前端 frontend(vanilla JS)
 scripts/deploy.sh      一键部署 one-click deploy
-scripts/smoke.js       npm test — 43 项冒烟回归 smoke suite(压缩模块往返 + 实例级用例)
+scripts/smoke.js       npm test — 44 项冒烟回归 smoke suite(压缩模块往返 + 实例级用例)
 instances/<id>/        每实例一个真实服务端目录 real server dir per instance
 backups/<id>/*.tar.gz  真实备份 real backups
 data/                  users / sessions / instances / tasks(持久化 persisted)
