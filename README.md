@@ -118,7 +118,7 @@ server.js              入口 entry (10 lines)
 src/                   后端分层模块 backend modules
 public/                前端 frontend(vanilla JS)
 scripts/deploy.sh      一键部署 one-click deploy
-scripts/smoke.js       npm test — 21 项真实 API 冒烟回归 real-API smoke suite
+scripts/smoke.js       npm test — 26 项真实 API 冒烟回归 real-API smoke suite
 instances/<id>/        每实例一个真实服务端目录 real server dir per instance
 backups/<id>/*.tar.gz  真实备份 real backups
 data/                  users / sessions / instances / tasks(持久化 persisted)
@@ -129,8 +129,8 @@ ecosystem.config.js    PM2 配置 PM2 config(fork + JAVA_BIN)
 ## ✅ 验收 Acceptance
 
 ```bash
-npm test          # scripts/smoke.js — 对运行中的面板做 21 项真实 API 回归
-                  # 21 real-API regression checks against a running panel
+npm test          # scripts/smoke.js — 对运行中的面板做 26 项真实 API 回归
+                  # 26 real-API regression checks against a running panel
 ```
 
 CI 在每次 push 时启动面板并跑完整冒烟;Docker 镜像由 Actions 构建并推送 GHCR。

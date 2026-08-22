@@ -86,5 +86,5 @@ PM2 **fork 模式**(见 ecosystem.config.js)。面板是有状态进程(会话�
 
 ## 测试
 
-`npm test`(scripts/smoke.js)对运行中的面板做 21 项真实 API 回归:
+`npm test`(scripts/smoke.js)对运行中的面板做 26 项真实 API 回归:
 健康检查、鉴权边界(401/403/404)、路径沙箱、实例全部子资源读取。
