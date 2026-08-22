@@ -1234,6 +1234,7 @@ async function loadProperties() {
   const [props, status] = await Promise.all([iapi('/properties'), iapi('/status')]);
   instMap.set(status.id, status);
   $('#cfg-xmx').value = status.xmx || 2048;
+  $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);
   $('#cfg-ygg-url').value = (status.yggdrasil && status.yggdrasil.url) || '';
   $('#props-grid').innerHTML = Object.entries(props).map(([k, v]) => {
@@ -1257,7 +1258,7 @@ $('#inst-cfg-save').addEventListener('click', async () => {
   if (yggEnabled && !/^https?:\/\/.+/.test(yggUrl)) return toast('启用外置登录需填写 Yggdrasil API 地址(http(s) URL)', true);
   const btn = $('#inst-cfg-save');
   btn.disabled = true;
-  const r = await iapi('', { method: 'PATCH', body: { xmx: mb, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
+  const r = await iapi('', { method: 'PATCH', body: { xmx: mb, autoRestart: $('#cfg-autorestart').checked, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
   btn.disabled = false;
   if (r.ok) {
     instMap.set(r.instance.id, r.instance);

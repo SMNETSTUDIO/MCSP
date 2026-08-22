@@ -18,6 +18,16 @@ const bus = require('./bus');
 /* taskset 可用性(util-linux,Linux 标配);缺失时 CPU 限核降级为不限制 */
 const TASKSET_OK = (() => { try { return spawnSync('taskset', ['-V']).status === 0; } catch { return false; } })();
 
+/* 崩溃自动重启:窗口内最多重启这么多次,超了就停手。
+   端口被占、jar 损坏这类"起来就死"的故障否则会无限重启刷屏,
+   还会把真正的报错顶出日志缓冲区。 */
+const CRASH_WINDOW_MS = 10 * 60_000;
+const CRASH_MAX_RESTARTS = 3;
+const CRASH_RESTART_DELAY_MS = 5000;
+
+/* 面板正在退出:此时子进程被挨个 stop 掉是预期行为,不能当崩溃处理 */
+const panel = { shuttingDown: false };
+
 class Instance {
   constructor(meta) {
     this.id = meta.id;
@@ -30,6 +40,8 @@ class Instance {
     this.xmx = meta.xmx || 2048;
     // 外置登录(authlib-injector):enabled + Yggdrasil API 地址
     this.yggdrasil = { enabled: false, url: '', ...(meta.yggdrasil || {}) };
+    // 崩溃自动重启,默认开;老实例注册表里没这个字段,按开处理
+    this.autoRestart = meta.autoRestart !== false;
     this.createdAt = meta.createdAt || Date.now();
 
     this.dir = path.join(INSTANCES_DIR, this.id);
@@ -43,6 +55,10 @@ class Instance {
     this.metricsHistory = [];
     this._lastCpu = null;
     this._stopTimeout = null;
+    this._crashTimes = [];            // 窗口内的崩溃时刻,用来判断是不是在打转
+    this._crashTimer = null;          // 待触发的自动重启
+    this._killedByUser = false;       // kill() 置位:强杀是用户要的,不算崩溃
+    this.autoRestartBlocked = false;  // 触发风暴保护后置位,手动启动时清掉
 
     this.tunnel = { ...DEFAULT_TUNNEL(), ...(meta.tunnel || {}) };
     this.tunnelProc = null;
@@ -53,7 +69,7 @@ class Instance {
   }
 
   meta() {
-    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, createdAt: this.createdAt, tunnel: this.tunnel };
+    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, createdAt: this.createdAt, tunnel: this.tunnel };
   }
 
   snapshot() {
@@ -68,6 +84,8 @@ class Instance {
       version: this.version,
       xmx: this.xmx,
       yggdrasil: this.yggdrasil,
+      autoRestart: this.autoRestart,
+      autoRestartBlocked: this.autoRestartBlocked,
       port: this.getProp('server-port') || '25565',
       startedAt: this.startedAt,
       uptime: this.startedAt ? Date.now() - this.startedAt : 0,
@@ -153,8 +171,10 @@ class Instance {
     return null;
   }
 
-  start() {
+  /** auto=true 表示这次是崩溃后的自动重启,不清空崩溃计数(否则风暴保护永远攒不满) */
+  start({ auto = false } = {}) {
     if (this.state !== 'stopped') return { ok: false, error: `实例当前状态为 ${this.state}` };
+    if (!auto) this.cancelAutoRestart();     // 手动启动 = 用户已介入,计数与封禁一并清零
     const t = TYPES[this.type] || TYPES.paper;
     const argsFile = t.installer ? this.findArgsFile() : null;
     if (!argsFile && !fs.existsSync(path.join(this.dir, this.jar))) {
@@ -228,6 +248,8 @@ class Instance {
     proc.on('exit', (code, signal) => {
       clearTimeout(this._stopTimeout);
       const wasStopping = this.state === 'stopping';
+      const killedByUser = this._killedByUser;
+      this._killedByUser = false;
       this.proc = null;
       this.state = 'stopped';
       this.startedAt = null;
@@ -240,11 +262,46 @@ class Instance {
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       if (this._restartAfterExit) {
         this._restartAfterExit = false;
-        setTimeout(() => this.start(), 1000);
+        setTimeout(() => this.start({ auto: true }), 1000);
+        return;
       }
+      // 崩溃 = 没人要它停,而且退出码不为 0。
+      // code === 0 说明服务端自己干净地关了(比如有人在控制台敲了 stop),那是用户的意思,别跟他对着干。
+      const crashed = !wasStopping && !killedByUser && !panel.shuttingDown && code !== 0;
+      if (crashed) this._onCrash();
     });
 
     return { ok: true };
+  }
+
+  /** 崩溃后按窗口计数决定要不要重来一次 */
+  _onCrash() {
+    if (!this.autoRestart) return;
+    const now = Date.now();
+    this._crashTimes = this._crashTimes.filter((t) => now - t < CRASH_WINDOW_MS);
+    this._crashTimes.push(now);
+
+    if (this._crashTimes.length > CRASH_MAX_RESTARTS) {
+      this.autoRestartBlocked = true;
+      this.log('ERROR', `[MCSP] ${CRASH_WINDOW_MS / 60000} 分钟内异常退出 ${this._crashTimes.length} 次,已停止自动重启 —— 请查日志排查后手动启动`);
+      this.emitState();
+      return;
+    }
+    this.log('WARN', `[MCSP] 检测到异常退出,${CRASH_RESTART_DELAY_MS / 1000} 秒后自动重启 (${this._crashTimes.length}/${CRASH_MAX_RESTARTS})`);
+    this._crashTimer = setTimeout(() => {
+      this._crashTimer = null;
+      if (this.state !== 'stopped') return;    // 这几秒里用户可能已经自己启动了
+      const r = this.start({ auto: true });
+      if (!r.ok) this.log('ERROR', `[MCSP] 自动重启失败: ${r.error}`);
+    }, CRASH_RESTART_DELAY_MS);
+  }
+
+  /** 撤销待触发的自动重启并清零计数(手动启动、删除实例、面板退出时调用) */
+  cancelAutoRestart() {
+    clearTimeout(this._crashTimer);
+    this._crashTimer = null;
+    this._crashTimes = [];
+    this.autoRestartBlocked = false;
   }
 
   _onServerLine(line) {
@@ -300,6 +357,7 @@ class Instance {
 
   kill() {
     if (!this.proc) return { ok: false, error: '实例未在运行' };
+    this._killedByUser = true;      // 强杀是用户点的,别当崩溃再拉起来
     this.log('WARN', '[MCSP] 强制终止进程 (SIGKILL)');
     try { this.proc.kill('SIGKILL'); } catch {}
     return { ok: true };
@@ -661,4 +719,4 @@ class Instance {
   }
 }
 
-module.exports = { Instance };
+module.exports = { Instance, panel };

@@ -34,6 +34,7 @@ from that process. No Java pre-install, no public IP required.
 | 🎮 外置登录:**authlib-injector** 自动下载 + `-javaagent` 注入,对接 LittleSkin 等 Yggdrasil 皮肤站 | External auth: auto-downloaded **authlib-injector** injected via `-javaagent`, works with LittleSkin & any Yggdrasil API |
 | ❯_ 控制台 = 真实 stdout 流(SSE)+ stdin 命令(↑↓ 历史);玩家/封禁/白名单/OP 均为真实数据 | Console = real stdout stream (SSE) + stdin commands; players/bans/whitelist/OP are real server data |
 | ⇄ 六种内网穿透:**bore / playit.gg / Pinggy / Serveo / ngrok / frpc**,每实例独立隧道、公网地址自动解析;frpc 支持 **frps-panel** 多用户鉴权(user + metadatas.token) | 6 tunnels: **bore / playit.gg / Pinggy / Serveo / ngrok / frpc**, one tunnel per instance with auto-parsed public address; frpc supports **frps-panel** auth (user + metadatas.token) |
+| ♻️ **崩溃自动重启**:进程异常退出 5 秒后自动拉起;10 分钟内连崩 3 次即停手告警,避免无限重启风暴。控制台手动 `stop`、点「停止/强杀」、面板自身关停均不触发 | ♻️ **Crash auto-restart**: relaunches 5s after an abnormal exit; gives up with an alert after 3 crashes in 10 min instead of restart-looping. Manual `stop`, the stop/kill buttons and panel shutdown never trigger it |
 | 📊 指标采样自 `/proc/<pid>`:真实 CPU% / RSS 内存实时曲线 | Metrics sampled from `/proc/<pid>`: real CPU% / RSS with live charts |
 | 🗀 文件管理器(路径沙箱):在线编辑 + **拖拽/多选上传**(实时进度条)+ **文件下载 / 目录打包 tar.gz 下载** + 重命名、✦ 插件启停(`.jar ⇄ .jar.disabled`)、◍ 世界管理、◷ 计划任务 | Sandboxed file manager: online editing + **drag-and-drop / multi-file upload** with live progress + **file download / folder download as tar.gz** + rename, plugin toggle (`.jar ⇄ .jar.disabled`), world management, scheduled tasks |
 | 🗜 **压缩包**:勾选任意文件/目录打包成 **zip / tar.gz**,整合包与世界包一键**解压**(zip / mrpack / tar / tar.gz / tar.bz2 / tar.xz)。zip 由面板用 zlib 自己读写(不装 unzip 也能用,认 GBK 文件名与 zip64),解压前先拦截 `..`、软链、加密包与 zip bomb | 🗜 **Archives**: pack any selection into **zip / tar.gz**, one-click **extract** for modpacks & world packs (zip / mrpack / tar / tar.gz / tar.bz2 / tar.xz). ZIP is read/written in-process with zlib — no `unzip` needed, handles GBK names and zip64 — and every archive is screened for `..`, symlinks, encryption and zip bombs before a single byte lands |
@@ -120,7 +121,7 @@ server.js              入口 entry (10 lines)
 src/                   后端分层模块 backend modules
 public/                前端 frontend(vanilla JS)
 scripts/deploy.sh      一键部署 one-click deploy
-scripts/smoke.js       npm test — 42 项冒烟回归 smoke suite(压缩模块往返 + 实例级用例)
+scripts/smoke.js       npm test — 43 项冒烟回归 smoke suite(压缩模块往返 + 实例级用例)
 instances/<id>/        每实例一个真实服务端目录 real server dir per instance
 backups/<id>/*.tar.gz  真实备份 real backups
 data/                  users / sessions / instances / tasks(持久化 persisted)

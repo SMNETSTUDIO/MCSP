@@ -37,6 +37,11 @@ server.js(入口,10 行)
 - **服务端进程**:`java -Xmx… -jar server.jar nogui`(新版 Forge/NeoForge 为 `java @libraries/…/unix_args.txt`)
   - stdout/stderr 按行解析:`Done (…s)!` → running;`joined/left the game` → 玩家表
   - stop = stdin 写 `stop`(优雅存档),30s 超时 SIGKILL;exit 事件统一复位状态
+  - **崩溃自动重启**:退出码非 0 且不是 stop/kill/面板关停引起的,5s 后自动拉起。
+    10 分钟内超过 3 次就置 `autoRestartBlocked` 停手 —— 端口占用、jar 损坏这类
+    "起来就死"的故障否则会无限重启,还会把真正的报错顶出日志缓冲区。
+    退出码 0 不重启:那是有人在控制台敲了 `stop`,别跟他对着干。
+    `app.js` 的 `shutdown()` 必须先置 `panel.shuttingDown`,否则面板正关着还在往回拉服
   - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样
 - **隧道进程**(独立于服务端,重启实例不断线):ngrok / frpc / playit / bore /
   Pinggy / Serveo 六种驱动,统一输出解析(`\r`/`\n` 双分隔 + ANSI 清洗),

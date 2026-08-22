@@ -87,7 +87,10 @@ app.use((err, req, res, next) => {   // eslint-disable-line no-unused-vars
 
 /* 优雅退出:先让所有子服 save-all 落盘 */
 function shutdown() {
+  // 必须先置位:否则子进程一个个退出时会被当成崩溃,面板正关着还在往回拉服
+  require('./instance').panel.shuttingDown = true;
   for (const inst of registry.instances.values()) {
+    inst.cancelAutoRestart();
     if (inst.tunnelProc) { try { inst.tunnelProc.kill('SIGTERM'); } catch {} }
     if (inst.proc) {
       try { inst.proc.stdin.write(inst.stopCmd + '\n'); } catch {}

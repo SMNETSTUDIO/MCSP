@@ -154,6 +154,15 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     }
   }
 
+  if (body.autoRestart !== undefined) {
+    const on = !!body.autoRestart;
+    if (on !== inst.autoRestart) {
+      inst.autoRestart = on;
+      if (!on) inst.cancelAutoRestart();
+      inst.log('INFO', `[MCSP] 崩溃自动重启已${on ? '开启' : '关闭'}`);
+    }
+  }
+
   if (body.yggdrasil !== undefined) {
     const y = body.yggdrasil || {};
     const enabled = !!y.enabled;
@@ -184,6 +193,7 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
 router.delete('/:iid', asyncHandler(async (req, res) => {
   const inst = req.inst;
   if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再删除' });
+  inst.cancelAutoRestart();     // 否则实例都删了,几秒后那个定时器还会来拉一次
   if (inst.tunnelProc) inst.stopTunnel();
   fs.rmSync(path.join(DATA_DIR, `frpc-${inst.id}.toml`), { force: true });
   fs.rmSync(path.join(DATA_DIR, `playit-${inst.id}.toml`), { force: true });

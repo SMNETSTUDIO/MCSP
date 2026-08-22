@@ -114,6 +114,7 @@ async function archiveRoundtrip() {
     const iid = inst.id;
     r = await req('GET', `/api/instances/${iid}/status`);
     check('instance status', r.status === 200 && r.json.id === iid);
+    check('status exposes autoRestart', typeof r.json.autoRestart === 'boolean', JSON.stringify(r.json.autoRestart));
 
     r = await req('GET', `/api/instances/${iid}/logs`);
     check('instance logs', r.status === 200 && Array.isArray(r.json));
