@@ -36,6 +36,10 @@ server.js(入口,10 行)
 一个 Instance = `instances/<id>/` 下的真实服务端目录 + 最多两个子进程:
 
 - **服务端进程**:`java -Xmx… -jar server.jar nogui`(新版 Forge/NeoForge 为 `java @libraries/…/unix_args.txt`)
+  - 额外 JVM 参数(`jvmArgs`)接在默认值之后 —— 同名 flag HotSpot 取最后一个,所以用户能盖掉默认;
+    写了 `-Xms` 就不再发默认的 `-Xms512M`。校验拒绝 `-Xmx`/`MaxHeapSize`/`MaxRAMPercentage`
+    (内存配额就是靠 `-Xmx` 落地的,放行等于让普通用户自己改配额)与 `-jar`/`-cp`/`@file`
+    (会改变到底启动了什么)。参数进的是 `spawn` 的 argv 数组、不过 shell,没有命令注入面
   - stdout/stderr 按行解析:`Done (…s)!` → running;`joined/left the game` → 玩家表
   - stop = stdin 写 `stop`(优雅存档),30s 超时 SIGKILL;exit 事件统一复位状态
   - **崩溃自动重启**:退出码非 0 且不是 stop/kill/面板关停引起的,5s 后自动拉起。

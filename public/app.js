@@ -888,6 +888,11 @@ async function fmArchive(format) {
   loadFiles(fmPath);
 }
 
+/* Aikar's Flags:MC 服务端调优的事实标准,手打太长,给个一键填入 */
+const AIKAR_FLAGS = "-XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true";
+$('#cfg-jvm-aikar').addEventListener('click', () => { $('#cfg-jvm').value = AIKAR_FLAGS; });
+$('#cfg-jvm-clear').addEventListener('click', () => { $('#cfg-jvm').value = ''; });
+
 $('#fm-zip').addEventListener('click', () => fmArchive('zip'));
 $('#fm-targz').addEventListener('click', () => fmArchive('tar.gz'));
 
@@ -1272,6 +1277,7 @@ async function loadProperties() {
   $('#cfg-name').value = status.name || '';
   $('#cfg-icon').value = status.icon || '🌳';
   $('#cfg-xmx').value = status.xmx || 2048;
+  $('#cfg-jvm').value = status.jvmArgs || '';
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);
@@ -1299,7 +1305,7 @@ $('#inst-cfg-save').addEventListener('click', async () => {
   btn.disabled = true;
   const name = $('#cfg-name').value.trim();
   if (!name) return toast('实例名称不能为空', true);
-  const r = await iapi('', { method: 'PATCH', body: { name, icon: $('#cfg-icon').value, xmx: mb, autoRestart: $('#cfg-autorestart').checked, autoStart: $('#cfg-autostart').checked, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
+  const r = await iapi('', { method: 'PATCH', body: { name, icon: $('#cfg-icon').value, xmx: mb, jvmArgs: $('#cfg-jvm').value, autoRestart: $('#cfg-autorestart').checked, autoStart: $('#cfg-autostart').checked, yggdrasil: { enabled: yggEnabled, url: yggUrl } } });
   btn.disabled = false;
   if (r.ok) {
     instMap.set(r.instance.id, r.instance);

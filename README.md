@@ -30,6 +30,7 @@ from that process. No Java pre-install, no public IP required.
 |------|---------|
 | 🔐 scrypt 哈希 + HttpOnly 会话 + 登录限速;**自定义 OAuth2 登录**(任意提供商,自动建号/绑定,state 防 CSRF) | scrypt hashing + HttpOnly sessions + login rate-limit; **custom OAuth2 login** (any provider, auto-register/bind, CSRF-safe state) |
 | 📦 10 种服务端官方源安装:Paper / Purpur / Folia / Vanilla / Fabric / Forge / NeoForge / Velocity / Waterfall / BungeeCord,新老版本全支持 | 10 server types from official sources; Forge/NeoForge run the official installer; legacy versions supported (Vanilla back to 1.2.5) |
+| ⚙ 实例可**改名/换图标**;**自定义 JVM 参数**(一键填入 Aikar's Flags),`-Xmx` 仍由配额统一管控 | Rename/re-icon instances; **custom JVM flags** with one-click Aikar's Flags, while `-Xmx` stays under quota control |
 | ☕ 面板内**一键安装 Java**(Temurin 25/21/17/8),按 MC 版本自动匹配运行时 | **One-click Java install** (Temurin 25/21/17/8), auto-matched to the MC version |
 | 🎮 外置登录:**authlib-injector** 自动下载 + `-javaagent` 注入,对接 LittleSkin 等 Yggdrasil 皮肤站 | External auth: auto-downloaded **authlib-injector** injected via `-javaagent`, works with LittleSkin & any Yggdrasil API |
 | ❯_ 控制台 = 真实 stdout 流(SSE)+ stdin 命令(↑↓ 历史);玩家/封禁/白名单/OP 均为真实数据 | Console = real stdout stream (SSE) + stdin commands; players/bans/whitelist/OP are real server data |

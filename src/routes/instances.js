@@ -10,7 +10,7 @@ const { asyncHandler, dirSize } = require('../utils');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
 const { users: authUsers } = require('../auth');
-const { Instance } = require('../instance');
+const { Instance, sanitizeJvmArgs } = require('../instance');
 const { instances, saveRegistry, installInstance } = require('../registry');
 const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
@@ -191,6 +191,16 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     // 只是个显示用的 emoji,限长 + 挡掉控制字符就够,不必枚举白名单
     const icon = String(body.icon).replace(/[\x00-\x1f]/g, '').trim().slice(0, 8);
     if (icon) inst.icon = icon;
+  }
+
+  if (body.jvmArgs !== undefined) {
+    const { error } = sanitizeJvmArgs(body.jvmArgs);
+    if (error) return res.status(400).json({ ok: false, error });
+    const text = String(body.jvmArgs).replace(/[\r\n]+/g, ' ').trim();
+    if (text !== inst.jvmArgs) {
+      inst.jvmArgs = text;
+      inst.log('INFO', `[MCSP] JVM 参数已更新${text ? '' : '(已清空,恢复默认)'}` + (inst.state === 'running' ? ' (重启后生效)' : ''));
+    }
   }
 
   if (body.autoRestart !== undefined) {

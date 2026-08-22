@@ -414,6 +414,13 @@
             </div>
             <div class="prop-row"><label>Yggdrasil API 地址</label><input id="cfg-ygg-url" type="text" placeholder="如 https://littleskin.cn/api/yggdrasil" /></div>
           </div>
+          <div class="prop-row" style="margin-top:14px">
+            <label>额外 JVM 参数
+              <button class="icon-btn" id="cfg-jvm-aikar" type="button" style="margin-left:8px">填入 Aikar's Flags</button>
+              <button class="icon-btn" id="cfg-jvm-clear" type="button">清空</button>
+            </label>
+            <textarea id="cfg-jvm" rows="3" spellcheck="false" placeholder="留空使用默认(-Xms512M -XX:+UseG1GC)。空格分隔,例如 -XX:+UseZGC -XX:+AlwaysPreTouch"></textarea>
+          </div>
           <div class="dim small" style="margin-top:14px">
             范围 512 ~ 65536 MB;运行中修改需重启实例后生效。<br>
             崩溃自动重启:进程非正常退出(退出码非 0)时 5 秒后自动拉起;控制台里手动 <code>stop</code>
@@ -421,6 +428,9 @@
             手动启动后计数清零。<br>
             面板重启后自动恢复:只恢复<b>面板停止时正在运行</b>的实例(多个实例每 5 秒拉起一个,避免同时启动抢磁盘);
             你主动停掉的实例不会因为面板重启又自己跑起来。<br>
+            额外 JVM 参数接在默认值之后,同名 flag 以你写的为准(例如写 <code>-Xms4G</code> 会盖掉默认的 512M)。
+            <b>内存上限请用上面的字段</b>,这里写 <code>-Xmx</code> 会被拒绝 —— 配额就是靠它落地的。
+            <code>-jar</code> / <code>-cp</code> 同样不允许。改完需重启实例生效。<br>
             外置登录通过 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
             将玩家认证转发到皮肤站的 Yggdrasil API(如 LittleSkin)。启用后首次保存会自动下载 authlib-injector;
             服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。

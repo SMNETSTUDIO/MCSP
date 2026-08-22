@@ -29,6 +29,32 @@ const CRASH_RESTART_DELAY_MS = 5000;
 const panel = { shuttingDown: false };
 
 /**
+ * 自定义 JVM 参数的白名单式校验,返回 { args, error }。
+ *
+ * 参数是拼进 spawn 的 argv 数组、不过 shell 的,所以没有命令注入面;
+ * 真正要挡的是这两类:
+ *   · -Xmx / -XX:MaxHeapSize / -XX:MaxRAMPercentage —— 内存配额就是靠 -Xmx 落地的,
+ *     放行等于让普通用户自己改配额;而且堆上限有两个来源本身就容易搞混。
+ *   · -jar / -cp / @file —— 会改变到底启动了什么,让启动命令不再可预测。
+ * 其余 -X / -XX / -D 一律放行:玩家要贴的 Aikar's Flags 就是这些。
+ */
+function sanitizeJvmArgs(raw) {
+  const text = String(raw || '').replace(/[\r\n]+/g, ' ').trim();
+  if (!text) return { args: [], error: null };
+  if (text.length > 2000) return { args: [], error: 'JVM 参数过长(上限 2000 字符)' };
+  const args = text.split(/\s+/).filter(Boolean);
+  if (args.length > 80) return { args: [], error: 'JVM 参数过多(上限 80 个)' };
+  for (const a of args) {
+    if (!a.startsWith('-')) return { args: [], error: `参数必须以 - 开头: ${a}` };
+    if (/^-Xmx/i.test(a) || /^-XX:MaxHeapSize/i.test(a) || /^-XX:MaxRAMPercentage/i.test(a)) {
+      return { args: [], error: `内存上限请用上面的「内存上限 -Xmx」字段设置,不要写在这里: ${a}` };
+    }
+    if (/^-(jar|cp|classpath)$/i.test(a)) return { args: [], error: `不允许覆盖启动目标: ${a}` };
+  }
+  return { args, error: null };
+}
+
+/**
  * 本机正在 LISTEN 的 TCP 端口。
  * 读 /proc 而不是试着 bind 一下:bind 是异步的,而 start() 是同步返回 {ok,error} 的,
  * 改成异步要动所有调用方。面板本来就只跑 Linux(指标也读 /proc),这里代价最小。
@@ -65,6 +91,7 @@ class Instance {
     // 面板重启后恢复,默认开;只有 wasRunning 为真才会真的拉起来,
     // 所以用户主动停掉的实例不会因为面板重启又自己跑起来
     this.autoStart = meta.autoStart !== false;
+    this.jvmArgs = typeof meta.jvmArgs === 'string' ? meta.jvmArgs : '';
     this.wasRunning = !!meta.wasRunning;
     this.createdAt = meta.createdAt || Date.now();
 
@@ -93,7 +120,7 @@ class Instance {
   }
 
   meta() {
-    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, autoStart: this.autoStart, wasRunning: this.wasRunning, createdAt: this.createdAt, tunnel: this.tunnel };
+    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, autoStart: this.autoStart, wasRunning: this.wasRunning, jvmArgs: this.jvmArgs, createdAt: this.createdAt, tunnel: this.tunnel };
   }
 
   snapshot() {
@@ -111,6 +138,7 @@ class Instance {
       autoRestart: this.autoRestart,
       autoRestartBlocked: this.autoRestartBlocked,
       autoStart: this.autoStart,
+      jvmArgs: this.jvmArgs,
       port: this.getProp('server-port') || '25565',
       startedAt: this.startedAt,
       uptime: this.startedAt ? Date.now() - this.startedAt : 0,
@@ -226,13 +254,19 @@ class Instance {
       agentArgs = [`-javaagent:${authlibJarPath()}=${this.yggdrasil.url}`];
       this.log('INFO', `[MCSP] 外置登录已启用 (authlib-injector → ${this.yggdrasil.url})`);
     }
+    // 自定义参数排在默认值之后:同一个 flag 出现两次时 HotSpot 取最后一个,
+    // 所以用户写 -Xms4G / 换 GC 都能盖掉默认值。-Xmx 在校验里已经禁掉了(配额靠它)。
+    const custom = sanitizeJvmArgs(this.jvmArgs).args;
+    const hasXms = custom.some((a) => /^-Xms/i.test(a));
     let args = [
       ...agentArgs,
-      '-Xms512M', `-Xmx${this.xmx}M`,
+      ...(hasXms ? [] : ['-Xms512M']), `-Xmx${this.xmx}M`,
       '-XX:+UseG1GC', '-Dterminal.jline=false', '-Dterminal.ansi=false',
+      ...custom,
       ...(argsFile ? [`@${argsFile}`] : ['-jar', this.jar]),
       ...(t.category === 'proxy' ? [] : ['nogui']),   // 代理不识别 nogui 参数
     ];
+    if (custom.length) this.log('INFO', `[MCSP] 自定义 JVM 参数 (${custom.length} 个): ${custom.join(' ')}`);
     // 普通用户的 CPU 配额:taskset 绑核,进程最多用到 maxCpuCores 个核(真实限制)
     let bin = javaBin;
     const { users } = require('./auth');   // 延迟加载,避免装配期循环依赖
@@ -792,4 +826,4 @@ class Instance {
   }
 }
 
-module.exports = { Instance, panel };
+module.exports = { Instance, panel, sanitizeJvmArgs };
