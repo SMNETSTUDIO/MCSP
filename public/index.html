@@ -436,6 +436,27 @@
             服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。
           </div>
         </div>
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>重装 / 升级版本</span>
+            <button class="btn btn-amber" id="ri-go">重装</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row"><label>服务端类型</label><select id="ri-type"><option value="">加载中…</option></select></div>
+            <div class="prop-row"><label>目标版本</label><select id="ri-version"><option value="">加载中…</option></select></div>
+            <div class="prop-row">
+              <label>重装前自动备份(强烈建议)</label>
+              <label class="switch prop-switch"><input type="checkbox" id="ri-backup" checked><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="dim small" id="ri-hint" style="margin-top:14px"></div>
+          <div class="dim small" style="margin-top:8px">
+            只替换服务端本体,<b>世界存档、插件/模组、server.properties 全部保留</b>。需先停止实例。<br>
+            ⚠ Minecraft <b>不支持世界降级</b>:从高版本换到低版本很可能让存档打不开甚至损坏。
+            跨大版本升级(如 1.20 → 1.21)也可能让部分插件/模组失效,升完请先确认再放玩家进来。
+            默认会在动手前打一份完整备份,出问题可在「备份」页回滚。
+          </div>
+        </div>
         <div class="card glass">
           <div class="card-title row-between">
             <span>server.properties</span>

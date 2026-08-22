@@ -385,6 +385,37 @@ $('#inst-grid').addEventListener('click', async (e) => {
 let serverTypes = null;                 // /api/servertypes 结果缓存
 const typeVersionCache = new Map();     // type -> versions[]
 
+/** 把某个类型的版本列表填进指定的 <select>;新建实例与重装两处共用 */
+async function fillVersions(typeSel, verSel, selected) {
+  const t = $(typeSel).value;
+  let list = typeVersionCache.get(t);
+  if (!list) {
+    $(verSel).innerHTML = '<option value="">加载版本列表…</option>';
+    const r = await api(`/servertypes/${t}/versions`);
+    if (!r.ok || !r.versions.length) {
+      $(verSel).innerHTML = `<option value="">版本加载失败${r.error ? ':' + r.error : ''}</option>`;
+      return;
+    }
+    list = r.versions;
+    typeVersionCache.set(t, list);
+  }
+  if ($(typeSel).value !== t) return;   // 等待期间用户又切了类型
+  $(verSel).innerHTML = list.map((v, i) =>
+    `<option value="${v}" ${v === selected || (!selected && i === 0) ? 'selected' : ''}>${v}</option>`).join('');
+}
+
+/** 确保 serverTypes 已加载,并把类型填进指定 <select> */
+async function fillTypes(typeSel, selected) {
+  if (!serverTypes) {
+    const r = await api('/servertypes');
+    if (!r.ok) { toast('服务端类型加载失败', true); return false; }
+    serverTypes = r.types;
+  }
+  $(typeSel).innerHTML = serverTypes.map((t) =>
+    `<option value="${t.key}" ${t.key === selected ? 'selected' : ''}>${t.label}</option>`).join('');
+  return true;
+}
+
 async function loadTypeVersions() {
   const t = $('#ni-type').value;
   const info = (serverTypes || []).find((x) => x.key === t);
@@ -392,31 +423,14 @@ async function loadTypeVersions() {
   $('#ni-type-hint').hidden = !(info && info.note);
   $('#ni-type-hint').textContent = info && info.note ? `ⓘ ${info.note}` : '';
   $('#ni-eula-row').style.display = info && info.category === 'proxy' ? 'none' : '';
-
-  let list = typeVersionCache.get(t);
-  if (!list) {
-    $('#ni-version').innerHTML = '<option value="">加载版本列表…</option>';
-    const r = await api(`/servertypes/${t}/versions`);
-    if (!r.ok || !r.versions.length) {
-      $('#ni-version').innerHTML = `<option value="">版本加载失败${r.error ? ':' + r.error : ''}</option>`;
-      return;
-    }
-    list = r.versions;
-    typeVersionCache.set(t, list);
-  }
-  if ($('#ni-type').value !== t) return;   // 等待期间用户又切了类型
-  $('#ni-version').innerHTML = list.map((v, i) => `<option value="${v}" ${i === 0 ? 'selected' : ''}>${v}</option>`).join('');
+  await fillVersions('#ni-type', '#ni-version');
 }
 
 $('#inst-create').addEventListener('click', async () => {
   $('#inst-modal').hidden = false;
   $('#ni-name').focus();
   if (!serverTypes) {
-    const r = await api('/servertypes');
-    if (!r.ok) return toast('服务端类型加载失败', true);
-    serverTypes = r.types;
-    $('#ni-type').innerHTML = serverTypes.map((t, i) => `<option value="${t.key}" ${i === 0 ? 'selected' : ''}>${t.label}</option>`).join('');
-    loadTypeVersions();
+    if (await fillTypes('#ni-type')) loadTypeVersions();
   }
 });
 $('#ni-type').addEventListener('change', loadTypeVersions);
@@ -888,6 +902,47 @@ async function fmArchive(format) {
   loadFiles(fmPath);
 }
 
+/* ── 重装 / 升级 ── */
+
+async function loadReinstall(status) {
+  if (!(await fillTypes('#ri-type', status.type))) return;
+  await fillVersions('#ri-type', '#ri-version', status.version);
+  const info = (serverTypes || []).find((x) => x.key === $('#ri-type').value);
+  $('#ri-hint').textContent = `当前:${typeLabel(status.type)} ${status.version}`
+    + (info && info.note ? ` · ⓘ ${info.note}` : '');
+}
+
+$('#ri-type').addEventListener('change', async () => {
+  await fillVersions('#ri-type', '#ri-version');
+  const info = (serverTypes || []).find((x) => x.key === $('#ri-type').value);
+  const cur = instMap.get(currentIid);
+  $('#ri-hint').textContent = (cur ? `当前:${typeLabel(cur.type)} ${cur.version}` : '')
+    + (info && info.note ? ` · ⓘ ${info.note}` : '');
+});
+
+$('#ri-go').addEventListener('click', async () => {
+  const cur = instMap.get(currentIid);
+  const type = $('#ri-type').value;
+  const version = $('#ri-version').value;
+  if (!version) return toast('版本列表尚未加载', true);
+  if (cur && cur.state !== 'stopped') return toast('请先停止实例再重装', true);
+  const backup = $('#ri-backup').checked;
+
+  const from = cur ? `${typeLabel(cur.type)} ${cur.version}` : '当前版本';
+  const warn = backup ? '' : '\n\n你已关闭自动备份 —— 出问题将无法回滚!';
+  if (!confirm(`确定把实例从 ${from} 换成 ${typeLabel(type)} ${version} ?\n\n`
+    + `世界、插件、server.properties 会保留。\n`
+    + `注意 Minecraft 不支持世界降级,换到更低版本可能损坏存档。${warn}`)) return;
+
+  const body = { type, version, backup, eula: true };
+  const btn = $('#ri-go');
+  btn.disabled = true;
+  const r = await iapi('/reinstall', { method: 'POST', body });
+  btn.disabled = false;
+  if (r.ok) toast(backup ? '已开始:先备份再重装,进度看控制台' : '已开始重装,进度看控制台');
+  else toast(r.error, true);
+});
+
 /* Aikar's Flags:MC 服务端调优的事实标准,手打太长,给个一键填入 */
 const AIKAR_FLAGS = "-XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true";
 $('#cfg-jvm-aikar').addEventListener('click', () => { $('#cfg-jvm').value = AIKAR_FLAGS; });
@@ -1278,6 +1333,7 @@ async function loadProperties() {
   $('#cfg-icon').value = status.icon || '🌳';
   $('#cfg-xmx').value = status.xmx || 2048;
   $('#cfg-jvm').value = status.jvmArgs || '';
+  loadReinstall(status);
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);

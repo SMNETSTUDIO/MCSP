@@ -11,7 +11,7 @@ const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
 const { users: authUsers } = require('../auth');
 const { Instance, sanitizeJvmArgs } = require('../instance');
-const { instances, saveRegistry, installInstance } = require('../registry');
+const { instances, saveRegistry, installInstance, reinstallInstance } = require('../registry');
 const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
 const { store: taskStore, saveTasks, taskScheduleText, runTask } = require('../tasks');
@@ -244,6 +244,33 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
   saveRegistry();
   inst.emitState();
   res.json({ ok: true, instance: inst.snapshot() });
+}));
+
+/* 重装 / 升级:换服务端 jar,保留世界与全部配置。默认先自动备份一份。 */
+router.post('/:iid/reinstall', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { type, version, backup } = req.body || {};
+  if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再重装' });
+
+  const stype = TYPES[type] ? type : inst.type;
+  if (!version || !/^[A-Za-z0-9._-]{1,40}$/.test(version)) return res.status(400).json({ ok: false, error: '版本无效' });
+  if (stype === inst.type && version === inst.version) {
+    return res.status(400).json({ ok: false, error: '目标类型与版本和当前一致,无需重装' });
+  }
+  // 代理换成服务端时才需要补 EULA —— 原本就是服务端的话创建时已经同意过
+  const needEula = TYPES[stype].category === 'server' && !fs.existsSync(path.join(inst.dir, 'eula.txt'));
+  if (needEula && !req.body.eula) {
+    return res.status(400).json({ ok: false, error: '切换为服务端类型需要同意 Minecraft EULA' });
+  }
+
+  const withBackup = backup !== false;
+  if (withBackup) {
+    const dqerr = diskQuotaError(req, disk.instanceUsage(inst.id).instMB);
+    if (dqerr) return res.status(403).json({ ok: false, error: `${dqerr} —— 可关闭「重装前自动备份」后重试` });
+  }
+
+  res.json({ ok: true });                       // 下载安装异步进行,进度经 SSE 推
+  reinstallInstance(inst, { type: stype, version, backup: withBackup });
 }));
 
 /* 删除实例:实例主人或管理员(param 层已做归属校验) */

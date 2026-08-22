@@ -9,6 +9,8 @@ const { Instance } = require('./instance');
 const { TYPES, resolveDownload } = require('./servertypes');
 const { resolveJavaBin } = require('./java');
 const bus = require('./bus');
+// 只用 createBackup(重装前留一份);backups 不反向依赖 registry,不成环
+const { createBackup } = require('./backups');
 
 const instances = new Map();
 
@@ -199,4 +201,74 @@ async function installInstance(inst, { port, gamemode, motd }) {
   bus.broadcast('instances', {});
 }
 
-module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, resumeInstances, installInstance };
+/**
+ * 重装 / 升级:只换服务端本体,世界、插件、server.properties 全部原样保留。
+ *
+ * 和 installInstance 的关键区别是**不碰 server.properties** —— 那里面有用户
+ * 攒下来的全部配置,重装时按模板重写一遍等于把设置清空。
+ * 失败时 type/version 保持原样(它们在下载成功之后才写回),实例还能按老版本启动。
+ */
+async function reinstallInstance(inst, { type, version, backup }) {
+  const t = TYPES[type] || TYPES.paper;
+  const oldJar = inst.jar;
+  const oldDesc = `${(TYPES[inst.type] || {}).label || inst.type} ${inst.version}`;
+  inst.state = 'installing';
+  inst.installProgress = 0;
+  inst.emitState();
+  try {
+    if (backup) {
+      // 换版本可能是不可逆的(MC 不支持世界降级),动手前先留一份
+      inst.log('INFO', '[MCSP] 重装前自动备份…');
+      const b = await createBackup(inst, `before-${type}-${version}`);
+      if (!b.ok) throw new Error(`重装前备份失败,已中止: ${b.error}`);
+    }
+    inst.log('INFO', `[MCSP] 开始重装:${oldDesc} → ${t.label} ${version}`);
+    const info = await resolveDownload(type, version);
+    inst.log('INFO', `[MCSP] 下载 ${info.name}${info.size ? ` (${(info.size / 1048576).toFixed(1)} MB)` : ''}`);
+    await downloadTo(inst, info, t.installer ? [0, 60] : [0, 95]);
+
+    if (t.installer) {
+      inst.installProgress = 60;
+      inst.emitState();
+      await runInstaller(inst, info.name);
+      finalizeInstallerLayout(inst, info.name);
+    } else {
+      inst.jar = info.name;
+    }
+
+    // 走到这里才算换成功,现在再写回元数据
+    inst.type = type;
+    inst.version = version;
+
+    // 旧 jar 换了名字就删掉,否则目录里会越堆越多历史版本(还容易手动启错)
+    if (oldJar && oldJar !== inst.jar && fs.existsSync(path.join(inst.dir, oldJar))) {
+      fs.rmSync(path.join(inst.dir, oldJar), { force: true });
+      inst.log('INFO', `[MCSP] 已移除旧服务端 ${oldJar}`);
+    }
+    // 代理换成服务端时,这两样此前不存在,补上;已存在则一概不动
+    if (t.category === 'server') {
+      const eula = path.join(inst.dir, 'eula.txt');
+      if (!fs.existsSync(eula)) {
+        fs.writeFileSync(eula, `# Accepted via MCSP on ${new Date().toISOString()}\neula=true\n`);
+      }
+      if (!fs.existsSync(inst.propsPath())) {
+        inst.writeProps({ 'server-port': '25565', 'motd': inst.name, 'max-players': '20', 'level-name': 'world' });
+      }
+    }
+    if (t.dataDir) fs.mkdirSync(path.join(inst.dir, t.dataDir), { recursive: true });
+
+    inst.state = 'stopped';
+    inst.installProgress = 100;
+    inst.invalidatePropsCache();
+    inst.log('INFO', `[MCSP] 重装完成:现在是 ${t.label} ${version},启动后生效`);
+    saveRegistry();
+  } catch (err) {
+    inst.state = 'stopped';
+    inst.installProgress = 0;
+    inst.log('ERROR', `[MCSP] 重装失败: ${err.message}(实例仍为 ${oldDesc},可照常启动)`);
+  }
+  inst.emitState();
+  bus.broadcast('instances', {});
+}
+
+module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, resumeInstances, installInstance, reinstallInstance };

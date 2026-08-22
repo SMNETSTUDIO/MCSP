@@ -14,7 +14,7 @@ server.js(入口,10 行)
         │    ├─ host.js       /api/host /api/servertypes /api/java  宿主机、服务端类型/版本、Java 运行时
         │    ├─ tunnel.js     /api/tunnel/components 穿透组件安装
         │    └─ instances.js  /api/instances/**      实例 CRUD 及全部子资源
-        ├─ src/registry.js    实例注册表 + 服务端下载安装流程(含 Forge/NeoForge 安装器)+ 指标轮询
+        ├─ src/registry.js    实例注册表 + 服务端下载安装/重装流程(含 Forge/NeoForge 安装器)+ 指标轮询
         ├─ src/instance.js    Instance 类(核心领域对象,见下)
         ├─ src/tasks.js       计划任务存储 + 30s 调度器
         ├─ src/backups.js     tar.gz 备份/恢复
@@ -61,6 +61,17 @@ server.js(入口,10 行)
 
 状态经 `snapshot()` 序列化,通过 SSE `state` 事件推送;所有状态变更点都调用
 `emitState()`,前端无需轮询。
+
+## 重装 / 升级(registry.js `reinstallInstance`)
+
+只换服务端本体,世界、插件/模组、`server.properties` 原样保留 —— 和 `installInstance`
+的关键区别就是**不碰 server.properties**:那里面是用户攒下来的全部配置,
+按模板重写一遍等于清空。
+
+`type`/`version` 在下载成功之后才写回,所以失败时实例仍是旧版本、照常能启动。
+旧 jar 改了名才删(避免目录里堆历史版本)。代理换成服务端时补 `eula.txt` 与最小
+`server.properties`,已存在则一概不动;按新类型的 `dataDir` 建 `plugins/` 或 `mods/`。
+默认在动手前跑一次完整备份 —— MC 不支持世界降级,换版本可能是不可逆的。
 
 ## 磁盘用量(src/disk.js)
 
