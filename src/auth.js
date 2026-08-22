@@ -7,6 +7,7 @@ const express = require('express');
 const path = require('path');
 const { USERS_FILE, SESSIONS_FILE, SESSION_TTL_MS, DATA_DIR } = require('./config');
 const { readJson, writeJson } = require('./utils');
+const totp = require('./totp');
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(password, salt, 64).toString('hex');
@@ -176,11 +177,39 @@ router.post('/login', (req, res) => {
     saveAttempts();
     return res.status(401).json({ ok: false, error: '用户名或密码错误' });
   }
+  // 2FA:密码对了还不够。验证码错误同样计入限速,否则第二道门可以无限暴力
+  if (user.totp && user.totp.enabled) {
+    const { code } = req.body || {};
+    const clean = String(code || '').replace(/[\s-]/g, '');
+    const byCode = clean && totp.verify(user.totp.secret, clean);
+    const recIdx = clean ? (user.totp.recovery || []).findIndex((c) => c.replace(/-/g, '') === clean.toUpperCase()) : -1;
+    if (!byCode && recIdx < 0) {
+      const a2 = loginAttempts.get(ip) || { count: 0, until: 0 };
+      a2.count += 1;
+      if (a2.count >= 5) { a2.until = Date.now() + 60000; a2.count = 0; }
+      loginAttempts.set(ip, a2);
+      saveAttempts();
+      return res.status(401).json({ ok: false, need2fa: true, error: clean ? '验证码不正确' : '需要两步验证码' });
+    }
+    // 恢复码一次性 —— 用过就作废,否则它就是一个永久的旁路口令
+    if (recIdx >= 0) {
+      user.totp.recovery.splice(recIdx, 1);
+      saveUsers();
+    }
+  }
+
   loginAttempts.delete(ip);
   saveAttempts();
   const token = createSession(user.username, req);
   res.setHeader('Set-Cookie', `mcsp_session=${token}; HttpOnly; Path=/; Max-Age=${7 * 86400}; SameSite=Lax`);
   res.json({ ok: true, user: { username: user.username, role: user.role, defaultPassword: !!user.defaultPassword } });
+});
+
+/* 探测某用户是否需要 2FA —— 登录页据此决定要不要显示验证码输入框。
+   有意对不存在的用户也返回 false 而不是报错:否则这就成了用户名枚举接口。 */
+router.post('/needs-2fa', (req, res) => {
+  const u = users.find((x) => x.username === (req.body || {}).username);
+  res.json({ ok: true, need2fa: !!(u && u.totp && u.totp.enabled) });
 });
 
 router.post('/logout', (req, res) => {
@@ -192,7 +221,55 @@ router.post('/logout', (req, res) => {
 
 router.get('/me', requireAuth, (req, res) => {
   const user = users.find((u) => u.username === req.user.username);
-  res.json({ ok: true, user: { username: user.username, role: user.role, defaultPassword: !!user.defaultPassword } });
+  res.json({ ok: true, user: { username: user.username, role: user.role, defaultPassword: !!user.defaultPassword, twoFactor: !!(user.totp && user.totp.enabled) } });
+});
+
+/* ── E3:两步验证(TOTP)── */
+
+/** 第一步:生成密钥并返回,此时还没启用 */
+router.post('/2fa/setup', requireAuth, (req, res) => {
+  if (req.user.viaToken) return res.status(403).json({ ok: false, error: '请用网页登录后再配置两步验证' });
+  const user = users.find((u) => u.username === req.user.username);
+  if (user.totp && user.totp.enabled) return res.status(400).json({ ok: false, error: '已经启用了两步验证' });
+  const secret = totp.generateSecret();
+  user.totp = { enabled: false, secret, recovery: [] };
+  saveUsers();
+  res.json({ ok: true, secret, otpauth: totp.otpauthUrl(secret, user.username) });
+});
+
+/** 第二步:输入一次正确的码来确认 App 配好了,这时才真正启用并发恢复码 */
+router.post('/2fa/enable', requireAuth, (req, res) => {
+  const user = users.find((u) => u.username === req.user.username);
+  if (!user.totp || !user.totp.secret) return res.status(400).json({ ok: false, error: '请先生成密钥' });
+  if (user.totp.enabled) return res.status(400).json({ ok: false, error: '已经启用了' });
+  if (!totp.verify(user.totp.secret, (req.body || {}).code)) {
+    return res.status(400).json({ ok: false, error: '验证码不正确,请检查手机时间是否准确' });
+  }
+  user.totp.enabled = true;
+  user.totp.recovery = totp.generateRecoveryCodes();
+  saveUsers();
+  // 恢复码也只在这里出现一次
+  res.json({ ok: true, recovery: user.totp.recovery });
+});
+
+/** 关闭要验密码 —— 否则谁摸到一个没锁屏的浏览器就能把这道锁拆了 */
+router.post('/2fa/disable', requireAuth, (req, res) => {
+  const user = users.find((u) => u.username === req.user.username);
+  if (!verifyPassword(String((req.body || {}).password || ''), user.password)) {
+    return res.status(400).json({ ok: false, error: '密码不正确' });
+  }
+  user.totp = { enabled: false, secret: '', recovery: [] };
+  saveUsers();
+  res.json({ ok: true });
+});
+
+router.get('/2fa', requireAuth, (req, res) => {
+  const user = users.find((u) => u.username === req.user.username);
+  res.json({
+    ok: true,
+    enabled: !!(user.totp && user.totp.enabled),
+    recoveryLeft: ((user.totp && user.totp.recovery) || []).length,
+  });
 });
 
 router.put('/password', requireAuth, (req, res) => {

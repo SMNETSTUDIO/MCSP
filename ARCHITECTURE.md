@@ -24,6 +24,7 @@ server.js(入口,10 行)
         ├─ src/audit.js       操作审计:写操作通用中间件 + JSONL 落盘 + 滚动
         ├─ src/modrinth.js    Modrinth 搜索/安装(loader 映射 + SHA-1 校验)
         ├─ src/rcon.js        RCON 客户端(Source 协议,每命令短连接)
+        ├─ src/totp.js        两步验证(RFC 6238,自实现,含恢复码)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -221,6 +222,12 @@ SpigotMC 没有官方下载 API。)
   否则一次泄露能自我延续
 - **会话管理**:用户能看到自己的活跃会话(只回 token 前 12 位 + IP/UA/最后活跃)并逐个踢掉,
   或一键「退出其它设备」;每小时清一次过期会话
+- **两步验证(TOTP,src/totp.js)**:自实现 RFC 6238(算法二十来行,不值得为它在认证路径上
+  引一棵依赖树),对过官方测试向量。前后各容一个 30s 窗口(手机时间差几十秒是常态);
+  比较用 `timingSafeEqual`。启用时发 8 个**一次性恢复码** —— 没有它用户会被自己永久锁在外面。
+  验证码错误同样计入登录限速,否则第二道门可以无限暴力。
+  **有意不生成二维码**:唯一省事的做法是把密钥拼进第三方二维码服务的 URL,
+  那等于把用户的 2FA 种子发给别人
 - 隧道配置输入全部白名单化清洗
 - 全局错误中间件 + `asyncHandler`:异步路由抛错返回 500 JSON,不打崩进程
 

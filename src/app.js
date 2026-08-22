@@ -15,7 +15,12 @@ app.use(express.json());
 
 /* 健康检查(免鉴权,供探针/监控使用) */
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, uptime: Date.now() - PANEL_STARTED, instances: registry.instances.size });
+  res.json({
+    ok: true,
+    version: require('../package.json').version,
+    uptime: Date.now() - PANEL_STARTED,
+    instances: registry.instances.size,
+  });
 });
 
 /* 审计:所有写操作都记一笔。挂在最前面,连登录尝试(含失败的)一起记 —— 

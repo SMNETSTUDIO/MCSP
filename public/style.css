@@ -1380,3 +1380,17 @@ body {
 }
 .icon-preview img { width: 64px; height: 64px; image-rendering: pixelated; }
 [data-theme="light"] .icon-preview { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.12); }
+
+.version-line { padding: 6px 8px 0; text-align: center; cursor: pointer; }
+.version-line:hover { color: var(--text); }
+.version-line .upd { color: var(--amber); font-weight: 600; text-decoration: none; }
+@media (max-width: 760px) { .version-line { display: none; } }
+
+.secret-box {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px; padding: 8px 10px; margin: 6px 0;
+  word-break: break-all; user-select: all; font-size: 13px;
+}
+.secret-box.small { font-size: 11px; }
+[data-theme="light"] .secret-box { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.12); }

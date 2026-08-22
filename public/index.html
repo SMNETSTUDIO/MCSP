@@ -83,9 +83,11 @@
           <div class="dim" id="me-role">—</div>
         </div>
         <div class="spacer"></div>
+        <button class="icon-btn" id="btn-account" title="账号安全:两步验证 / API Token / 登录设备">🛡</button>
         <button class="icon-btn" id="btn-passwd" title="修改密码">🔑</button>
         <button class="icon-btn danger" id="btn-logout" title="退出登录">⏻</button>
       </div>
+      <div class="version-line dim small" id="version-line" title="点击检查更新">—</div>
     </aside>
 
     <!-- ───────── Main ───────── -->
@@ -543,6 +545,40 @@
           </div>
           <div id="props-grid" class="props-grid"></div>
           <div class="dim small" style="margin-top:14px">运行中修改需重启实例后生效。</div>
+        </div>
+      </section>
+
+      <!-- Account (所有用户) -->
+      <section class="view" id="view-account">
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>两步验证 <span class="task-badge off" id="fa-badge">未启用</span></span>
+            <span>
+              <button class="btn btn-blue small-btn" id="fa-setup">启用</button>
+              <button class="icon-btn danger" id="fa-off" hidden>关闭</button>
+            </span>
+          </div>
+          <div id="fa-body" class="dim small">用手机上的认证器 App(如 Google Authenticator、Authy、1Password)生成动态验证码。</div>
+        </div>
+
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>API Token <span class="dim small">给脚本用:<code>Authorization: Bearer &lt;token&gt;</code></span></span>
+            <span>
+              <input id="tk-name" type="text" placeholder="用途,如 备份脚本" style="width:150px" />
+              <button class="icon-btn" id="tk-add">新建</button>
+            </span>
+          </div>
+          <div id="tk-list"></div>
+          <div class="dim small" style="margin-top:10px">明文只在创建时显示一次,面板只存摘要 —— 丢了只能重新建一个。</div>
+        </div>
+
+        <div class="card glass">
+          <div class="card-title row-between">
+            <span>活跃会话</span>
+            <button class="icon-btn danger" id="ss-others">退出其它设备</button>
+          </div>
+          <div id="ss-list"></div>
         </div>
       </section>
 

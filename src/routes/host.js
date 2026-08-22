@@ -8,6 +8,22 @@ const { instances } = require('../registry');
 const { listTypes, typeVersions, TYPES } = require('../servertypes');
 const java = require('../java');
 const disk = require('../disk');
+const { githubLatestTag } = require('../utils');
+const { version: PANEL_VERSION } = require('../../package.json');
+
+/* 更新检查缓存 1 小时 —— 每次打开总览都去请求 GitHub 既慢又容易被限流 */
+let updateCache = { at: 0, latest: null };
+const UPDATE_TTL_MS = 3600_000;
+
+/** 语义化版本比较:a 比 b 新返回 true。非数字段按 0 处理,够用了 */
+function isNewer(a, b) {
+  const pa = String(a).split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0);
+  }
+  return false;
+}
 
 const router = express.Router();
 
@@ -28,6 +44,7 @@ router.get('/host', asyncHandler(async (req, res) => {
     nodeVersion: process.version,
     javaVersion,
     java: java.javaInfo(),
+    panelVersion: PANEL_VERSION,
     panelUptime: Date.now() - PANEL_STARTED,
     instanceCount: visible.length,
     runningCount: visible.filter((i) => i.state === 'running').length,
@@ -36,6 +53,25 @@ router.get('/host', asyncHandler(async (req, res) => {
     instanceDisk: visible
       .map((i) => ({ id: i.id, name: i.name, icon: i.icon, ...disk.instanceUsage(i.id) }))
       .sort((a, b) => b.totalMB - a.totalMB),
+  });
+}));
+
+/* 更新检查。?force=1 跳过缓存(用户点「检查更新」时用)。
+   拿不到就如实说"查不到",不要假装是最新版 —— 那比不查更糟。 */
+router.get('/version', asyncHandler(async (req, res) => {
+  const fresh = req.query.force === '1' || Date.now() - updateCache.at > UPDATE_TTL_MS;
+  if (fresh) {
+    const latest = await githubLatestTag('SMNETSTUDIO/MCSP', null);
+    updateCache = { at: Date.now(), latest };
+  }
+  const latest = updateCache.latest;
+  res.json({
+    ok: true,
+    current: PANEL_VERSION,
+    latest,
+    hasUpdate: !!latest && isNewer(latest, PANEL_VERSION),
+    checkedAt: updateCache.at,
+    url: 'https://github.com/SMNETSTUDIO/MCSP/releases',
   });
 }));
 

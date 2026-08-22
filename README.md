@@ -28,7 +28,7 @@ from that process. No Java pre-install, no public IP required.
 
 | 中文 | English |
 |------|---------|
-| 🔐 scrypt 哈希 + HttpOnly 会话 + **持久化**登录限速;**API Token**(Bearer,存摘要)、**活跃会话管理**(看设备/踢单个/退出其它);**自定义 OAuth2 登录**(任意提供商,自动建号/绑定,state 防 CSRF) | scrypt hashing + HttpOnly sessions + login rate-limit; **custom OAuth2 login** (any provider, auto-register/bind, CSRF-safe state) |
+| 🔐 scrypt 哈希 + HttpOnly 会话 + **持久化**登录限速;**两步验证 TOTP**(自实现 RFC 6238,带一次性恢复码)、**API Token**(Bearer,存摘要)、**活跃会话管理**(看设备/踢单个/退出其它);**自定义 OAuth2 登录**(任意提供商,自动建号/绑定,state 防 CSRF) | scrypt hashing + HttpOnly sessions + login rate-limit; **custom OAuth2 login** (any provider, auto-register/bind, CSRF-safe state) |
 | 📦 10 种服务端官方源安装:Paper / Purpur / Folia / Vanilla / Fabric / Forge / NeoForge / Velocity / Waterfall / BungeeCord,新老版本全支持 | 10 server types from official sources; Forge/NeoForge run the official installer; legacy versions supported (Vanilla back to 1.2.5) |
 | ⚙ 实例可**改名/换图标**、**换服务端类型 / 升降级 MC 版本**(世界·插件·配置全保留,重装前自动备份)、**一键克隆**(自动分配空闲端口);**自定义 JVM 参数**(一键填入 Aikar's Flags),`-Xmx` 仍由配额统一管控 | Rename/re-icon instances, **switch server type or MC version in place** (worlds, plugins and config all kept, auto-backup first), **one-click clone** (free port auto-assigned); **custom JVM flags** with one-click Aikar's Flags, while `-Xmx` stays under quota control |
 | ☕ 面板内**一键安装 Java**(Temurin 25/21/17/8),按 MC 版本自动匹配运行时 | **One-click Java install** (Temurin 25/21/17/8), auto-matched to the MC version |
@@ -48,6 +48,7 @@ from that process. No Java pre-install, no public IP required.
 | 🕵 **操作审计**:谁在什么时候动了什么,**含失败尝试**(403/404/登录失败);口令类字段自动脱敏,管理员在系统设置页可筛选查看 | 🕵 **Audit log**: who did what and when, **including failed attempts** (403/404/bad logins); credential fields auto-redacted, filterable by admins |
 | 🤝 **实例共享**:把实例分享给其他面板用户一起管(控制台·文件·备份全都能用),但协作者**不能删实例、不能改名单**;配额始终算在主人头上 | 🤝 **Share an instance** with other panel users — they get full day-to-day control but **cannot delete it or edit the collaborator list**; quota always counts against the owner |
 | ◉ 多租户:普通用户实例**隔离**,配额真实生效——实例数 / 内存(-Xmx 之和)/ CPU 核(taskset 绑核)/ **磁盘**(实例目录 + 备份,上传·解压·打包·备份五处校验) | Multi-tenant: isolated user instances with enforced quotas — instance count / memory (Σ-Xmx) / CPU cores (taskset pinning) / **disk** (instance dir + backups, enforced on upload, extract, pack and backup) |
+| ⬆ 侧栏显示**面板版本**并可点击**检查更新**(比对 GitHub 最新 tag);查不到时如实显示「更新状态未知」而不是假装最新 | ⬆ The sidebar shows the **panel version** and checks for updates against the latest GitHub tag — and says "unknown" when it can't reach it rather than pretending you're current |
 | 🎨 双主题:像素风(Minecraft GUI 质感)/ Apple 液态玻璃;深浅色、6 主题色、密度可调 | Two themes: pixel (Minecraft GUI) / Apple liquid glass; dark/light, 6 accent colors, density options |
 
 ## 🚀 快速开始 Quick Start

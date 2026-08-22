@@ -208,6 +208,11 @@
           <label for="password">密码</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required />
         </div>
+        <div class="field" id="code-field" hidden>
+          <label for="code">两步验证码</label>
+          <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code"
+                 placeholder="6 位数字,或一个恢复码" />
+        </div>
         <button class="btn btn-blue login-btn" type="submit" id="login-btn">登录</button>
         <div class="login-error" id="login-error"></div>
         <div id="oauth-area" hidden style="margin-top:14px;text-align:center">
@@ -251,6 +256,7 @@
           body: JSON.stringify({
             username: form.username.value.trim(),
             password: form.password.value,
+            code: form.code ? form.code.value.trim() : '',
           }),
         });
         const data = await res.json();
@@ -258,6 +264,14 @@
           btn.textContent = '欢迎回来';
           location.href = '/';
           return;
+        }
+        // 服务端说需要两步验证码就把输入框亮出来,不必先跳一个页面
+        if (data.need2fa) {
+          const f = document.getElementById('code-field');
+          const wasHidden = f.hidden;
+          f.hidden = false;
+          document.getElementById('code').focus();
+          if (wasHidden) throw new Error('该账号开启了两步验证,请输入验证码');
         }
         throw new Error(data.error || '登录失败');
       } catch (err) {

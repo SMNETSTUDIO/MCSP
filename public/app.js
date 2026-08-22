@@ -17,6 +17,7 @@ const VIEW_TITLES = {
   settings: ['设置', ''],
   users: ['用户管理', '面板账户与权限'],
   system: ['系统设置', '注册开关与公告'],
+  account: ['账号安全', '两步验证 · API Token · 登录设备'],
 };
 
 const TUNNEL_STATE_TEXT = {
@@ -108,7 +109,7 @@ function escapeHtml(s) {
 /* ───────── navigation ───────── */
 
 function switchView(view) {
-  const instViews = !['overview', 'users', 'system'].includes(view);
+  const instViews = !['overview', 'users', 'system', 'account'].includes(view);
   if (instViews && !currentIid) {
     toast('请先创建一个实例', true);
     view = 'overview';
@@ -121,7 +122,7 @@ function switchView(view) {
   $('#view-title').textContent = title;
   const inst = instMap.get(currentIid);
   $('#topbar-sub').textContent = sub || (inst ? `${inst.name} · ${typeLabel(inst.type)} ${inst.version} · 端口 ${inst.port}` : '');
-  $('#inst-actions').hidden = ['overview', 'users', 'system'].includes(view);
+  $('#inst-actions').hidden = ['overview', 'users', 'system', 'account'].includes(view);
 
   const loaders = {
     overview: loadOverview,
@@ -137,6 +138,7 @@ function switchView(view) {
     settings: loadProperties,
     users: loadUsers,
     system: loadSystem,
+    account: loadAccount,
   };
   (loaders[view] || (() => {}))();
 }
@@ -1181,6 +1183,127 @@ async function fmArchive(format) {
   loadFiles(fmPath);
 }
 
+/* ── 账号安全:2FA / Token / 会话 ── */
+
+$('#btn-account').addEventListener('click', () => switchView('account'));
+
+async function loadAccount() { await Promise.all([load2fa(), loadTokens(), loadSessions()]); }
+
+async function load2fa() {
+  const d = await api('/auth/2fa');
+  const on = d && d.enabled;
+  $('#fa-badge').textContent = on ? '已启用' : '未启用';
+  $('#fa-badge').className = `task-badge ${on ? '' : 'off'}`;
+  $('#fa-setup').hidden = on;
+  $('#fa-off').hidden = !on;
+  $('#fa-body').innerHTML = on
+    ? `已启用。剩余恢复码 <b>${d.recoveryLeft}</b> 个 —— 手机丢了就靠它们登录,用完一个少一个。`
+    : '用手机上的认证器 App(如 Google Authenticator、Authy、1Password)生成动态验证码。';
+}
+
+$('#fa-setup').addEventListener('click', async () => {
+  const d = await api('/auth/2fa/setup', { method: 'POST' });
+  if (!d.ok) return toast(d.error, true);
+  // 有意不画二维码:唯一省事的做法是把密钥拼进第三方二维码服务的 URL,
+  // 那等于把 2FA 种子发给别人
+  $('#fa-body').innerHTML = `
+    <div style="margin-bottom:10px">在认证器 App 里选「手动输入密钥」,填:</div>
+    <div class="secret-box">${escapeHtml(d.secret)}</div>
+    <div class="dim small" style="margin:10px 0">
+      账号名填 <code>MCSP:${escapeHtml(me.username)}</code>,类型「基于时间」。
+      支持 <code>otpauth://</code> 链接的 App 也可以直接粘贴:
+      <div class="secret-box small">${escapeHtml(d.otpauth)}</div>
+      面板不生成二维码 —— 那需要把密钥交给第三方绘图服务。
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+      <input id="fa-code" inputmode="numeric" placeholder="App 上显示的 6 位码" style="width:200px" />
+      <button class="btn btn-blue small-btn" id="fa-confirm">确认启用</button>
+    </div>`;
+  $('#fa-confirm').addEventListener('click', async () => {
+    const r = await api('/auth/2fa/enable', { method: 'POST', body: { code: $('#fa-code').value.trim() } });
+    if (!r.ok) return toast(r.error, true);
+    alert('两步验证已启用。\n\n请把下面这些恢复码抄下来存好 —— 手机丢了时它们是唯一的进入方式,每个只能用一次,而且不会再显示第二遍:\n\n' + r.recovery.join('\n'));
+    load2fa();
+  });
+});
+
+$('#fa-off').addEventListener('click', async () => {
+  const pw = prompt('关闭两步验证需要验证当前密码:');
+  if (!pw) return;
+  const r = await api('/auth/2fa/disable', { method: 'POST', body: { password: pw } });
+  r.ok ? (toast('两步验证已关闭'), load2fa()) : toast(r.error, true);
+});
+
+async function loadTokens() {
+  const d = await api('/auth/tokens');
+  const list = (d && d.tokens) || [];
+  $('#tk-list').innerHTML = list.length ? list.map((t) => `
+    <div class="audit-row">
+      <div class="au-time dim small">${new Date(t.createdAt).toLocaleDateString('zh-CN')}</div>
+      <div class="au-user">${escapeHtml(t.name)}</div>
+      <div class="au-action dim small">${t.lastUsed ? '最后使用 ' + fmtAgo(t.lastUsed) : '从未使用'}</div>
+      <div></div>
+      <div style="text-align:right"><button class="icon-btn danger" data-tkdel="${t.id}">撤销</button></div>
+    </div>`).join('') : '<div class="empty">还没有 Token</div>';
+}
+
+$('#tk-add').addEventListener('click', async () => {
+  const r = await api('/auth/tokens', { method: 'POST', body: { name: $('#tk-name').value.trim() } });
+  if (!r.ok) return toast(r.error, true);
+  $('#tk-name').value = '';
+  prompt('Token 创建成功。请立刻复制保存 —— 面板只存摘要,这串明文不会再显示第二次:', r.token);
+  loadTokens();
+});
+$('#tk-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-tkdel]');
+  if (!b || !confirm('撤销后用它的脚本会立刻失效,确定?')) return;
+  const r = await api(`/auth/tokens/${b.dataset.tkdel}`, { method: 'DELETE' });
+  r.ok ? (toast('已撤销'), loadTokens()) : toast(r.error, true);
+});
+
+async function loadSessions() {
+  const d = await api('/auth/sessions');
+  const list = (d && d.sessions) || [];
+  $('#ss-list').innerHTML = list.map((sx) => `
+    <div class="audit-row">
+      <div class="au-time dim small">${new Date(sx.lastSeen).toLocaleString('zh-CN')}</div>
+      <div class="au-user">${sx.current ? '本设备' : '其它设备'}</div>
+      <div class="au-action dim small">${escapeHtml(sx.ip || '-')}</div>
+      <div></div>
+      <div class="au-detail dim small" title="${escapeHtml(sx.ua)}">${escapeHtml(sx.ua || '未知客户端')}
+        ${sx.current ? '' : `<button class="icon-btn danger" data-ssdel="${sx.id}">踢下线</button>`}</div>
+    </div>`).join('') || '<div class="empty">没有活跃会话</div>';
+}
+$('#ss-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-ssdel]');
+  if (!b) return;
+  const r = await api(`/auth/sessions/${b.dataset.ssdel}`, { method: 'DELETE' });
+  r.ok ? (toast('已踢下线'), loadSessions()) : toast(r.error, true);
+});
+$('#ss-others').addEventListener('click', async () => {
+  if (!confirm('退出除本设备外的所有登录?')) return;
+  const r = await api('/auth/sessions/revoke-others', { method: 'POST' });
+  r.ok ? (toast(`已退出 ${r.killed} 个会话`), loadSessions()) : toast(r.error, true);
+});
+
+/* ── 面板版本与更新检查 ── */
+
+async function checkVersion(force) {
+  const el = $('#version-line');
+  if (force) el.textContent = '检查中…';
+  const v = await api(`/version${force ? '?force=1' : ''}`);
+  if (!v || !v.ok) { el.textContent = 'v?'; return; }
+  if (v.hasUpdate) {
+    el.innerHTML = `v${escapeHtml(v.current)} · <a href="${v.url}" target="_blank" rel="noopener" class="upd">有新版 ${escapeHtml(v.latest)}</a>`;
+  } else if (v.latest) {
+    el.textContent = `v${v.current} · 已是最新`;
+  } else {
+    // 查不到就说查不到,别显示"已是最新" —— 那会让人以为检查过了
+    el.textContent = `v${v.current} · 更新状态未知`;
+  }
+}
+$('#version-line').addEventListener('click', () => checkVersion(true));
+
 /* ── 协作者 ── */
 
 function renderCollab(status) {
@@ -1984,6 +2107,8 @@ function renderNotify(n) {
   badge.textContent = n.enabled ? '已启用' : '未启用';
   badge.className = `task-badge ${n.enabled ? '' : 'off'}`;
 }
+
+checkVersion(false);
 
 $('#nt-save').addEventListener('click', async () => {
   const r = await api('/settings', { method: 'PUT', body: { notify: notifyBody() } });
