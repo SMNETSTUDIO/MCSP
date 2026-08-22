@@ -29,6 +29,28 @@ function startMetricsLoop() {
   setInterval(() => { for (const inst of instances.values()) inst.tickMetrics(); }, 2000);
 }
 
+/* 恢复时错峰:几个 MC 服同时启动会把磁盘和 CPU 顶满,谁都起不来 */
+const RESUME_STAGGER_MS = 5000;
+const RESUME_FIRST_DELAY_MS = 2000;
+
+/**
+ * 面板重启后把之前在运行的实例拉回来。
+ * 只认 autoStart && wasRunning —— 用户主动停掉的实例不会因为面板重启又自己跑起来。
+ */
+function resumeInstances() {
+  const pending = [...instances.values()].filter((i) => i.autoStart && i.wasRunning);
+  if (!pending.length) return;
+  console.log(`[MCSP] 面板重启,将恢复 ${pending.length} 个之前在运行的实例(每 ${RESUME_STAGGER_MS / 1000}s 一个)`);
+  pending.forEach((inst, idx) => {
+    setTimeout(() => {
+      if (inst.state !== 'stopped') return;      // 这期间用户可能已经自己点了启动
+      inst.log('INFO', '[MCSP] 面板重启,自动恢复运行');
+      const r = inst.start({ auto: true });
+      if (!r.ok) inst.log('ERROR', `[MCSP] 自动恢复失败: ${r.error}`);
+    }, RESUME_FIRST_DELAY_MS + idx * RESUME_STAGGER_MS);
+  });
+}
+
 /** 流式下载到实例目录,进度映射到 [from,to] 区间;支持多候选 URL 回退 */
 async function downloadTo(inst, info, [from, to]) {
   const urls = info.candidates || [info.url];
@@ -177,4 +199,4 @@ async function installInstance(inst, { port, gamemode, motd }) {
   bus.broadcast('instances', {});
 }
 
-module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, installInstance };
+module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, resumeInstances, installInstance };

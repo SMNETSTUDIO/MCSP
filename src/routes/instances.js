@@ -163,6 +163,14 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     }
   }
 
+  if (body.autoStart !== undefined) {
+    const on = !!body.autoStart;
+    if (on !== inst.autoStart) {
+      inst.autoStart = on;
+      inst.log('INFO', `[MCSP] 面板重启后自动恢复已${on ? '开启' : '关闭'}`);
+    }
+  }
+
   if (body.yggdrasil !== undefined) {
     const y = body.yggdrasil || {};
     const enabled = !!y.enabled;

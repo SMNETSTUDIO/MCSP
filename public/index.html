@@ -399,6 +399,10 @@
               <label class="switch prop-switch"><input type="checkbox" id="cfg-autorestart"><span class="slider"></span></label>
             </div>
             <div class="prop-row">
+              <label>面板重启后自动恢复</label>
+              <label class="switch prop-switch"><input type="checkbox" id="cfg-autostart"><span class="slider"></span></label>
+            </div>
+            <div class="prop-row">
               <label>外置登录(authlib-injector)</label>
               <label class="switch prop-switch"><input type="checkbox" id="cfg-ygg-on"><span class="slider"></span></label>
             </div>
@@ -409,6 +413,8 @@
             崩溃自动重启:进程非正常退出(退出码非 0)时 5 秒后自动拉起;控制台里手动 <code>stop</code>
             或点「停止 / 强杀」不会触发。10 分钟内连续异常退出超过 3 次就停手并在控制台告警,
             手动启动后计数清零。<br>
+            面板重启后自动恢复:只恢复<b>面板停止时正在运行</b>的实例(多个实例每 5 秒拉起一个,避免同时启动抢磁盘);
+            你主动停掉的实例不会因为面板重启又自己跑起来。<br>
             外置登录通过 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
             将玩家认证转发到皮肤站的 Yggdrasil API(如 LittleSkin)。启用后首次保存会自动下载 authlib-injector;
             服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。

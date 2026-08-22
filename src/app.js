@@ -107,6 +107,8 @@ function start() {
   tasks.startScheduler();
   app.listen(PORT, () => {
     console.log(`MCSP panel running at http://localhost:${PORT}`);
+    // 端口起来之后再恢复实例:恢复要几十秒,不该把面板本身堵在后面
+    registry.resumeInstances();
   });
 }
 

@@ -42,6 +42,10 @@ class Instance {
     this.yggdrasil = { enabled: false, url: '', ...(meta.yggdrasil || {}) };
     // 崩溃自动重启,默认开;老实例注册表里没这个字段,按开处理
     this.autoRestart = meta.autoRestart !== false;
+    // 面板重启后恢复,默认开;只有 wasRunning 为真才会真的拉起来,
+    // 所以用户主动停掉的实例不会因为面板重启又自己跑起来
+    this.autoStart = meta.autoStart !== false;
+    this.wasRunning = !!meta.wasRunning;
     this.createdAt = meta.createdAt || Date.now();
 
     this.dir = path.join(INSTANCES_DIR, this.id);
@@ -69,7 +73,7 @@ class Instance {
   }
 
   meta() {
-    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, createdAt: this.createdAt, tunnel: this.tunnel };
+    return { id: this.id, name: this.name, icon: this.icon, owner: this.owner, type: this.type, version: this.version, jar: this.jar, xmx: this.xmx, yggdrasil: this.yggdrasil, autoRestart: this.autoRestart, autoStart: this.autoStart, wasRunning: this.wasRunning, createdAt: this.createdAt, tunnel: this.tunnel };
   }
 
   snapshot() {
@@ -86,6 +90,7 @@ class Instance {
       yggdrasil: this.yggdrasil,
       autoRestart: this.autoRestart,
       autoRestartBlocked: this.autoRestartBlocked,
+      autoStart: this.autoStart,
       port: this.getProp('server-port') || '25565',
       startedAt: this.startedAt,
       uptime: this.startedAt ? Date.now() - this.startedAt : 0,
@@ -171,10 +176,11 @@ class Instance {
     return null;
   }
 
-  /** auto=true 表示这次是崩溃后的自动重启,不清空崩溃计数(否则风暴保护永远攒不满) */
+  /** auto=true 表示这次不是人点的(崩溃重启 / 开机恢复),不清空崩溃计数(否则风暴保护永远攒不满) */
   start({ auto = false } = {}) {
     if (this.state !== 'stopped') return { ok: false, error: `实例当前状态为 ${this.state}` };
     if (!auto) this.cancelAutoRestart();     // 手动启动 = 用户已介入,计数与封禁一并清零
+    this._setWasRunning(true);
     const t = TYPES[this.type] || TYPES.paper;
     const argsFile = t.installer ? this.findArgsFile() : null;
     if (!argsFile && !fs.existsSync(path.join(this.dir, this.jar))) {
@@ -296,6 +302,18 @@ class Instance {
     }, CRASH_RESTART_DELAY_MS);
   }
 
+  /**
+   * 记录"用户希望它是开着的",供面板重启后恢复用。
+   * 只在 start / stop / kill 这些**有人表达意图**的地方翻转 —— 崩溃退出时保持不变,
+   * 这样"崩了之后面板也挂了"的组合下,面板起来仍会把它拉回来。
+   */
+  _setWasRunning(v) {
+    if (this.wasRunning === v) return;
+    this.wasRunning = v;
+    // 延迟 require:registry 依赖 instance,顶层引会成环
+    try { require('./registry').saveRegistry(); } catch {}
+  }
+
   /** 撤销待触发的自动重启并清零计数(手动启动、删除实例、面板退出时调用) */
   cancelAutoRestart() {
     clearTimeout(this._crashTimer);
@@ -336,6 +354,8 @@ class Instance {
   stop() {
     if (!this.proc) return { ok: false, error: '实例未在运行' };
     if (this.state === 'stopping') return { ok: false, error: '正在停止中' };
+    // restart() 也走这里,但它随后会再 start(),wasRunning 会被重新置回 true
+    if (!this._restartAfterExit) this._setWasRunning(false);
     this.state = 'stopping';
     this.emitState();
     try { this.proc.stdin.write(this.stopCmd + '\n'); } catch {}
@@ -358,6 +378,7 @@ class Instance {
   kill() {
     if (!this.proc) return { ok: false, error: '实例未在运行' };
     this._killedByUser = true;      // 强杀是用户点的,别当崩溃再拉起来
+    this._setWasRunning(false);
     this.log('WARN', '[MCSP] 强制终止进程 (SIGKILL)');
     try { this.proc.kill('SIGKILL'); } catch {}
     return { ok: true };

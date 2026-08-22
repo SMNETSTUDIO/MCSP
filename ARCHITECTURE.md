@@ -42,6 +42,10 @@ server.js(入口,10 行)
     "起来就死"的故障否则会无限重启,还会把真正的报错顶出日志缓冲区。
     退出码 0 不重启:那是有人在控制台敲了 `stop`,别跟他对着干。
     `app.js` 的 `shutdown()` 必须先置 `panel.shuttingDown`,否则面板正关着还在往回拉服
+  - **面板重启后恢复**:`wasRunning` 随 start/stop/kill 持久化进注册表(崩溃退出时**不**翻转,
+    所以"崩了之后面板也挂了"仍会被拉回来);面板监听端口后 `resumeInstances()` 把
+    `autoStart && wasRunning` 的实例每 5s 拉起一个。用户主动停掉的实例 `wasRunning=false`,
+    不会因为面板重启又自己跑起来
   - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样
 - **隧道进程**(独立于服务端,重启实例不断线):ngrok / frpc / playit / bore /
   Pinggy / Serveo 六种驱动,统一输出解析(`\r`/`\n` 双分隔 + ANSI 清洗),
