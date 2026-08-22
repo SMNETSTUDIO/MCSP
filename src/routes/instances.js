@@ -353,7 +353,13 @@ router.get('/:iid/logs/download', (req, res) => {
     `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${inst.name}-${stamp}.log`)}`);
   res.send(body);
 });
-router.get('/:iid/metrics/history', (req, res) => res.json(req.inst.metricsHistory));
+/* ?range=day 给 24 小时的分钟级聚合(含峰值);默认仍是秒级实时曲线 */
+router.get('/:iid/metrics/history', (req, res) => {
+  if (req.query.range === 'day') {
+    return res.json({ ok: true, range: 'day', points: req.inst.metricsMinutes });
+  }
+  res.json(req.inst.metricsHistory);
+});
 
 router.post('/:iid/server/:action', (req, res) => {
   const inst = req.inst;

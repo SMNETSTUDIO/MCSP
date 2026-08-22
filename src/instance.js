@@ -29,6 +29,14 @@ const CRASH_RESTART_DELAY_MS = 5000;
    一行日志对象约 150 字节,5000 行 × 几十个实例仍是几十 MB 量级,可接受。 */
 const LOG_BUFFER_LINES = Math.max(500, parseInt(process.env.MCSP_LOG_LINES, 10) || 5000);
 
+/* 指标两档保留:
+   · 秒级 150 点 × 2s ≈ 5 分钟,给实时曲线用;
+   · 分钟级 1440 点 = 24 小时,回答"昨晚是不是内存打满了"。
+   分钟档存的是这一分钟的均值 + 峰值 —— 只存均值会把瞬时尖峰抹平,
+   而尖峰恰恰是排查 OOM 时最要看的东西。都在内存里,面板重启即丢。 */
+const METRICS_LIVE_POINTS = 150;
+const METRICS_MINUTE_POINTS = 1440;
+
 /* 面板正在退出:此时子进程被挨个 stop 掉是预期行为,不能当崩溃处理 */
 const panel = { shuttingDown: false };
 
@@ -108,6 +116,8 @@ class Instance {
     this.players = new Set();
     this.metrics = { cpu: 0, ram: 0, ramMax: this.xmx };
     this.metricsHistory = [];
+    this.metricsMinutes = [];         // 分钟级聚合,24 小时
+    this._minuteBucket = null;
     this._lastCpu = null;
     this._stopTimeout = null;
     this._crashTimes = [];            // 窗口内的崩溃时刻,用来判断是不是在打转
@@ -359,6 +369,32 @@ class Instance {
   }
 
   /** 崩溃后按窗口计数决定要不要重来一次 */
+  /** 把秒级采样折进当前分钟桶;跨分钟时结算出一条分钟级记录 */
+  _rollMinute(point) {
+    const minute = Math.floor(point.t / 60000) * 60000;
+    const b = this._minuteBucket;
+    if (b && b.minute !== minute) {
+      this.metricsMinutes.push({
+        t: b.minute,
+        cpu: Math.round(b.cpuSum / b.n),
+        ram: Math.round(b.ramSum / b.n),
+        cpuPeak: b.cpuPeak,
+        ramPeak: b.ramPeak,
+      });
+      if (this.metricsMinutes.length > METRICS_MINUTE_POINTS) this.metricsMinutes.shift();
+      this._minuteBucket = null;
+    }
+    if (!this._minuteBucket) {
+      this._minuteBucket = { minute, n: 0, cpuSum: 0, ramSum: 0, cpuPeak: 0, ramPeak: 0 };
+    }
+    const cur = this._minuteBucket;
+    cur.n++;
+    cur.cpuSum += point.cpu;
+    cur.ramSum += point.ram;
+    cur.cpuPeak = Math.max(cur.cpuPeak, point.cpu);
+    cur.ramPeak = Math.max(cur.ramPeak, point.ram);
+  }
+
   _onCrash() {
     if (!this.autoRestart) return;
     const now = Date.now();
@@ -833,7 +869,8 @@ class Instance {
     this.metrics.ramMax = this.xmx;
     const point = { t: Date.now(), cpu: this.metrics.cpu, ram: this.metrics.ram };
     this.metricsHistory.push(point);
-    if (this.metricsHistory.length > 150) this.metricsHistory.shift();
+    if (this.metricsHistory.length > METRICS_LIVE_POINTS) this.metricsHistory.shift();
+    this._rollMinute(point);
     if (this.proc || this.metricsHistory.length < 3 || this.metricsHistory[this.metricsHistory.length - 2].ram !== 0) {
       bus.broadcast('metrics', { iid: this.id, ...point });
     }

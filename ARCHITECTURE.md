@@ -57,7 +57,9 @@ server.js(入口,10 行)
   - **启动前查端口**:同面板实例撞端口能报出是哪个实例;本机其它进程占用则读
     `/proc/net/tcp{,6}` 的 LISTEN 项判定(不用试 bind —— 那是异步的,而 `start()`
     同步返回)。不查也能起,但 BindException 埋在 Java 栈里,还会触发崩溃自动重启反复撞
-  - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样
+  - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样,两档保留:秒级 150 点(≈5 分钟,实时曲线)+
+    分钟级 1440 点(24 小时)。分钟档同时存均值**和峰值** —— 只存均值会把瞬时尖峰抹平,
+    而排查 OOM 时要看的恰恰是尖峰。都在内存,面板重启即丢
 - **隧道进程**(独立于服务端,重启实例不断线):ngrok / frpc / playit / bore /
   Pinggy / Serveo 六种驱动,统一输出解析(`\r`/`\n` 双分隔 + ANSI 清洗),
   公网地址就绪后 4s 自动做一次 mcPing 连通性验证,失败原因写入 `tunnelError`

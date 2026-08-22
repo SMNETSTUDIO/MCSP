@@ -44,6 +44,8 @@ let currentView = 'overview';
 let currentIid = localStorage.getItem('mcsp_iid') || null;
 let instMap = new Map();          // iid -> snapshot
 let metricsHistory = [];
+let metricsDay = [];                 // 分钟级聚合(近 24h),切到 day 档时按需拉取
+let chartRange = 'live';
 let cmdHistory = [];
 let cmdHistoryIdx = -1;
 let fmPath = '/';
@@ -176,6 +178,9 @@ $('#inst-select').addEventListener('change', async (e) => {
 
 async function refreshInstanceContext() {
   metricsHistory = await iapi('/metrics/history');
+  metricsDay = [];
+  chartRange = 'live';
+  $$('#chart-range button').forEach((b) => b.classList.toggle('active', b.dataset.range === 'live'));
   const logs = await iapi('/logs');
   $('#console').innerHTML = '';
   $('#dash-log').innerHTML = '';
@@ -502,8 +507,16 @@ function drawChart() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const data = metricsHistory.slice(-90);
-  if (data.length < 2) return;
+  // day 档画分钟级聚合(用峰值,均值会把尖峰抹平,而排查 OOM 就是要看尖峰)
+  const data = chartRange === 'day'
+    ? metricsDay.map((p) => ({ t: p.t, cpu: p.cpuPeak, ram: p.ramPeak }))
+    : metricsHistory.slice(-90);
+  if (data.length < 2) {
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.font = '13px system-ui, sans-serif';
+    ctx.fillText(chartRange === 'day' ? '还没有攒够一分钟的数据' : '暂无数据', 12, h / 2);
+    return;
+  }
 
   ctx.strokeStyle = 'rgba(255,255,255,0.07)';
   ctx.lineWidth = 1;
@@ -786,6 +799,18 @@ $('#view-plugins').addEventListener('change', async (e) => {
   const r = await iapi(`/plugins/${encodeURIComponent(input.dataset.plugin)}/toggle`, { method: 'POST' });
   if (r.ok) { toast(`${r.plugin.name} 已${r.plugin.enabled ? '启用' : '禁用'},重启实例后生效`); loadPlugins(); }
   else toast(r.error, true);
+});
+
+$('#chart-range').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-range]');
+  if (!btn) return;
+  chartRange = btn.dataset.range;
+  $$('#chart-range button').forEach((b) => b.classList.toggle('active', b === btn));
+  if (chartRange === 'day') {
+    const d = await iapi('/metrics/history?range=day');
+    metricsDay = (d && d.points) || [];
+  }
+  drawChart();
 });
 
 /* ───────── file manager ───────── */
@@ -1826,7 +1851,7 @@ function connectStream() {
       inst.metrics = { ...inst.metrics, cpu: p.cpu, ram: p.ram };
       applyDashboardStats(inst);
     }
-    if (currentView === 'dashboard') drawChart();
+    if (currentView === 'dashboard' && chartRange === 'live') drawChart();
   });
   es.addEventListener('players', (e) => {
     const d = JSON.parse(e.data);

@@ -162,7 +162,13 @@
 
         <div class="dash-row">
           <div class="card glass chart-card">
-            <div class="card-title">性能监控 <span class="dim small">CPU % · 内存 MB</span></div>
+            <div class="card-title row-between">
+              <span>性能监控 <span class="dim small">CPU % · 内存 MB</span></span>
+              <span class="seg" id="chart-range">
+                <button class="active" data-range="live">实时 5 分钟</button>
+                <button data-range="day">近 24 小时</button>
+              </span>
+            </div>
             <canvas id="chart" height="190"></canvas>
             <div class="legend">
               <span><i class="dot dot-blue"></i>CPU</span>
