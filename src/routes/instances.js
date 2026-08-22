@@ -311,40 +311,51 @@ router.post('/:iid/worlds/:name/:action', (req, res) => {
   return res.status(400).json({ ok: false, error: '未知操作' });
 });
 
-/* ── 插件:真实 jar,开关 = 重命名 .disabled ── */
+/* ── 插件 / 模组:真实 jar,开关 = 重命名 .disabled ──
+   目录取 servertypes 里声明的 dataDir:Paper 系是 plugins/,Fabric/Forge/NeoForge 是 mods/,
+   Vanilla 为 null(原版两者都不支持)。安装实例时 registry 就是按这个字段建的目录。 */
+
+/** 扩展目录名与称呼;dataDir 为 null 时返回 null */
+function extDir(inst) {
+  const name = (TYPES[inst.type] || TYPES.paper).dataDir;
+  if (!name) return null;
+  return { name, kind: name === 'mods' ? 'mod' : 'plugin', noun: name === 'mods' ? '模组' : '插件' };
+}
 
 router.get('/:iid/plugins', (req, res) => {
-  const dir = path.join(req.inst.dir, 'plugins');
-  let out = [];
+  const ext = extDir(req.inst);
+  if (!ext) return res.json({ ok: true, dir: null, kind: null, noun: null, items: [] });
+  const dir = path.join(req.inst.dir, ext.name);
+  let items = [];
   try {
-    out = fs.readdirSync(dir)
+    items = fs.readdirSync(dir)
       .filter((f) => f.endsWith('.jar') || f.endsWith('.jar.disabled'))
       .map((f) => {
         const st = fs.statSync(path.join(dir, f));
-        const enabled = f.endsWith('.jar');
         return {
           id: f,
           name: f.replace(/\.jar(\.disabled)?$/, ''),
-          enabled,
+          enabled: f.endsWith('.jar'),
           sizeMB: +(st.size / 1048576).toFixed(2),
           mtime: st.mtimeMs,
         };
       });
   } catch {}
-  res.json(out);
+  res.json({ ok: true, dir: ext.name, kind: ext.kind, noun: ext.noun, items });
 });
 
 router.post('/:iid/plugins/:id/toggle', (req, res) => {
   const inst = req.inst;
-  const dir = path.join(inst.dir, 'plugins');
+  const ext = extDir(inst);
+  if (!ext) return res.status(400).json({ ok: false, error: '该服务端类型不支持插件或模组' });
   const file = req.params.id;
   if (/[/\\]/.test(file)) return res.status(400).json({ ok: false, error: '非法文件名' });
-  const p = path.join(dir, file);
-  if (!fs.existsSync(p)) return res.status(404).json({ ok: false, error: '插件不存在' });
+  const p = path.join(inst.dir, ext.name, file);
+  if (!fs.existsSync(p)) return res.status(404).json({ ok: false, error: `${ext.noun}不存在` });
   const target = file.endsWith('.disabled') ? p.replace(/\.disabled$/, '') : p + '.disabled';
   fs.renameSync(p, target);
   const enabled = !file.endsWith('.disabled');
-  inst.log('INFO', `[MCSP] 插件 ${path.basename(target)} 已${enabled ? '禁用' : '启用'} (重启后生效)`);
+  inst.log('INFO', `[MCSP] ${ext.noun} ${path.basename(target)} 已${enabled ? '禁用' : '启用'} (重启后生效)`);
   res.json({ ok: true, plugin: { name: path.basename(target), enabled: !enabled } });
 });
 

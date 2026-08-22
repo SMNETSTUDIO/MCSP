@@ -658,12 +658,28 @@ $('#view-worlds').addEventListener('click', async (e) => {
 /* ───────── plugins ───────── */
 
 async function loadPlugins() {
-  const plugins = await iapi('/plugins');
-  if (!plugins.length) {
-    $('#plugin-list').innerHTML = '<div class="card glass"><div class="empty">plugins 目录为空。把插件 .jar 放入实例的 plugins/ 目录(可用「文件」页确认),重启实例即可加载。</div></div>';
+  const d = await iapi('/plugins');
+  const items = d.items || [];
+  const noun = d.noun || '插件';
+  // Paper 系是 plugins/,Fabric/Forge 是 mods/,Vanilla 两者都不支持 —— 标题跟着实例类型走,
+  // 免得 Forge 用户在写着「插件」的页面上找模组
+  $('#view-title').textContent = noun;
+  const navBtn = $('.nav-item[data-view="plugins"]');
+  if (navBtn) navBtn.innerHTML = `<span class="nav-ico">✦</span>${noun}`;
+
+  if (!d.dir) {
+    $('#plugin-list').innerHTML = `<div class="card glass"><div class="empty">
+      原版(Vanilla)服务端不支持插件或模组。想装插件请改用 Paper / Purpur / Folia,
+      想装模组请用 Fabric / Forge / NeoForge。</div></div>`;
     return;
   }
-  $('#plugin-list').innerHTML = plugins.map((p) => `
+  if (!items.length) {
+    $('#plugin-list').innerHTML = `<div class="card glass"><div class="empty">
+      <code>${d.dir}/</code> 目录为空。把${noun} .jar 放进实例的 <code>${d.dir}/</code>
+      目录(可在「文件」页上传,压缩包可直接解压),重启实例即可加载。</div></div>`;
+    return;
+  }
+  $('#plugin-list').innerHTML = items.map((p) => `
     <div class="card glass plugin-item">
       <div class="plugin-icon">${escapeHtml(p.name[0] || '?')}</div>
       <div class="plugin-body">
