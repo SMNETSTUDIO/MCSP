@@ -273,6 +273,9 @@ async function loadOverview() {
     ['CPU', `${escapeHtml(host.cpuModel.split(' ').slice(0, 3).join(' '))} <span class="dim small">× ${host.cores}</span>`],
     ['负载', `${host.loadavg.join(' / ')}`],
     ['内存', `${memPct}% <span class="dim small">${Math.round((host.totalMem - host.freeMem) / 1024)} / ${Math.round(host.totalMem / 1024)} GB</span>`],
+    ['磁盘', host.disk
+      ? `<span class="${host.disk.usedPct >= 90 ? 'disk-warn' : ''}">${host.disk.usedPct}%</span> <span class="dim small">${(host.disk.usedMB / 1024).toFixed(1)} / ${(host.disk.totalMB / 1024).toFixed(1)} GB</span>`
+      : '<span class="dim small">不可用</span>'],
     ['面板运行', fmtUptime(host.panelUptime)],
     ['Java', `<span id="java-cell">${javaCellHtml(host)}</span>`],
     ['Node', host.nodeVersion],
@@ -280,7 +283,24 @@ async function loadOverview() {
     ['架构', `${escapeHtml(host.platform.split(' ')[0])} ${host.arch}`],
   ].map(([l, v]) => `<div class="host-item"><div class="h-label">${l}</div><div class="h-value">${v}</div></div>`).join('');
 
+  renderDiskBreakdown(host);
   renderInstGrid();
+}
+
+/* 各实例吃了多少磁盘 —— 只有存在实例时才显示,空面板不摆一张空卡片 */
+function renderDiskBreakdown(host) {
+  const rows = (host.instanceDisk || []).filter((d) => d.totalMB > 0);
+  const box = $('#disk-breakdown');
+  box.hidden = !rows.length;
+  if (!rows.length) return;
+  const max = rows[0].totalMB || 1;
+  $('#disk-rows').innerHTML = rows.map((d) => `
+    <div class="disk-row">
+      <div class="d-name">${d.icon || '🌳'} ${escapeHtml(d.name)}</div>
+      <div class="d-bar"><i style="width:${Math.max(2, Math.round((d.totalMB / max) * 100))}%"></i></div>
+      <div class="d-size">${fmtSize(d.totalMB * 1048576)}</div>
+      <div class="d-detail dim small">实例 ${fmtSize(d.instMB * 1048576)} · 备份 ${fmtSize(d.backupMB * 1048576)}</div>
+    </div>`).join('');
 }
 
 function renderInstGrid() {

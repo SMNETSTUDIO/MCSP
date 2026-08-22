@@ -755,6 +755,25 @@ body {
 .inst-del { position: absolute; top: 14px; right: 14px; opacity: 0; transition: opacity 0.2s; }
 .inst-card:hover .inst-del { opacity: 1; }
 
+/* ── 磁盘占用明细 ── */
+
+.disk-row {
+  display: grid; grid-template-columns: minmax(120px, 1fr) 2fr 90px auto;
+  align-items: center; gap: 12px;
+  padding: 8px 4px; font-size: 13px;
+}
+.disk-row .d-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.disk-row .d-bar { height: 6px; border-radius: 3px; overflow: hidden; background: rgba(255, 255, 255, 0.12); }
+.disk-row .d-bar i { display: block; height: 100%; background: var(--blue); }
+.disk-row .d-size { text-align: right; font-variant-numeric: tabular-nums; }
+.disk-row .d-detail { justify-self: end; }
+.disk-warn { color: var(--red); font-weight: 700; }
+[data-theme="light"] .disk-row .d-bar { background: rgba(0, 0, 0, 0.1); }
+@media (max-width: 760px) {
+  .disk-row { grid-template-columns: 1fr auto; }
+  .disk-row .d-bar, .disk-row .d-detail { display: none; }
+}
+
 /* ── file manager ── */
 
 .files-card { display: flex; flex-direction: column; position: relative; }

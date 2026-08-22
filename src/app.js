@@ -104,6 +104,7 @@ process.on('SIGTERM', shutdown);
 function start() {
   registry.loadRegistry();
   registry.startMetricsLoop();
+  require('./disk').startDiskLoop();
   tasks.startScheduler();
   app.listen(PORT, () => {
     console.log(`MCSP panel running at http://localhost:${PORT}`);

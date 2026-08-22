@@ -19,6 +19,7 @@ server.js(入口,10 行)
         ├─ src/tasks.js       计划任务存储 + 30s 调度器
         ├─ src/backups.js     tar.gz 备份/恢复
         ├─ src/archive.js     压缩包:zip 用 zlib 自读写,tar 家族调系统 tar(均先做安全校验)
+        ├─ src/disk.js        磁盘用量:分区 statfs + 每实例体积后台缓存(60s)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -56,6 +57,13 @@ server.js(入口,10 行)
 
 状态经 `snapshot()` 序列化,通过 SSE `state` 事件推送;所有状态变更点都调用
 `emitState()`,前端无需轮询。
+
+## 磁盘用量(src/disk.js)
+
+分区容量走 `fs.statfs`(用 `bavail` 而非 `bfree` —— 后者含 root 保留块,普通用户拿不到)。
+每实例体积 = 实例目录 + 它的备份目录,要递归 stat 几万个文件,**不能在请求里现算**:
+后台每 60s 串行扫一遍缓存,接口与配额检查都读缓存。代价是最长有一个扫描周期的滞后,
+对"别把磁盘占满"这个目的够用;删大文件/备份后可以 `refresh(iid)` 立即重算。
 
 ## 数据与持久化(data/,gitignore)
 

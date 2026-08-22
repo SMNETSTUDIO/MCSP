@@ -120,6 +120,10 @@
           <div class="card-title">宿主机 <span class="dim small" id="host-name"></span></div>
           <div class="host-grid" id="host-grid"></div>
         </div>
+        <div class="card glass" id="disk-breakdown" style="margin-top:18px" hidden>
+          <div class="card-title">磁盘占用 <span class="dim small">实例目录 + 备份,每分钟刷新</span></div>
+          <div id="disk-rows"></div>
+        </div>
         <div class="overview-head">
           <div class="card-title" style="margin:0">实例列表</div>
           <button class="btn btn-blue" id="inst-create">＋ 新建实例</button>

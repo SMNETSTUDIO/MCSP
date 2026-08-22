@@ -7,10 +7,11 @@ const { requireAdmin } = require('../auth');
 const { instances } = require('../registry');
 const { listTypes, typeVersions, TYPES } = require('../servertypes');
 const java = require('../java');
+const disk = require('../disk');
 
 const router = express.Router();
 
-router.get('/host', (req, res) => {
+router.get('/host', asyncHandler(async (req, res) => {
   const cpus = os.cpus();
   const javaVersion = java.bestJavaVersionLine();
   // 实例计数只统计当前用户可见的(普通用户之间互相隔离)
@@ -30,8 +31,13 @@ router.get('/host', (req, res) => {
     panelUptime: Date.now() - PANEL_STARTED,
     instanceCount: visible.length,
     runningCount: visible.filter((i) => i.state === 'running').length,
+    disk: await disk.hostDisk(),
+    // 谁在吃磁盘 —— 只列当前用户看得见的实例
+    instanceDisk: visible
+      .map((i) => ({ id: i.id, name: i.name, icon: i.icon, ...disk.instanceUsage(i.id) }))
+      .sort((a, b) => b.totalMB - a.totalMB),
   });
-});
+}));
 
 /* Java 运行时:状态查询 + 一键安装全部缺失版本 */
 router.get('/java', (req, res) => res.json(java.javaInfo()));
