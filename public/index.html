@@ -473,6 +473,8 @@
               <label>开放注册(OAuth 未绑定身份可自动建号)</label>
               <label class="switch prop-switch"><input type="checkbox" id="sys-reg"><span class="slider"></span></label>
             </div>
+            <div class="prop-row"><label>备份保留份数(每实例,0 = 不限)</label><input id="sys-bk-count" type="number" min="0" max="3650" /></div>
+            <div class="prop-row"><label>备份保留天数(0 = 不限)</label><input id="sys-bk-days" type="number" min="0" max="3650" /></div>
           </div>
           <div class="prop-row" style="margin-top:14px">
             <label>公告(所有用户登录后顶部可见;留空则不显示)</label>
@@ -480,7 +482,10 @@
           </div>
           <div class="dim small" style="margin-top:14px">
             「开放注册」是总开关:关闭后即使 OAuth 配置里开着「自动建号」,新身份也无法注册(已有账号不受影响)。
-            公告修改后立即对所有用户生效;用户关掉的公告再次编辑后会重新弹出。
+            公告修改后立即对所有用户生效;用户关掉的公告再次编辑后会重新弹出。<br>
+            备份保留策略在每次备份成功后执行,两个条件取并集(任一超限即删)。最新的一份永远保留,
+            所以把天数调得很短也不会把刚做完的备份删掉。<b>不影响手动删除</b>,也不会去动历史遗留的备份 ——
+            它们会在下次备份时一并按策略清理。
           </div>
         </div>
 

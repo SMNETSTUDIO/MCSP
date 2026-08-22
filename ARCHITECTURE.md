@@ -65,6 +65,7 @@ server.js(入口,10 行)
 | sessions.json | 会话 token(7 天 TTL) | 登录/登出,防抖 500ms |
 | instances.json | 实例元数据 + 穿透配置 | 实例/配置变更 |
 | tasks.json | 计划任务 | 任务变更、每次触发 |
+| settings.json | 注册开关、公告、备份保留策略 | 系统设置保存时 |
 | frpc-\<iid\>.toml / playit-\<iid\>.toml | 隧道进程配置/密钥 | 隧道启动/绑定 |
 | ssh/id_ed25519(.pub) | SSH 类隧道专用密钥 | 首次使用时生成 |
 
@@ -96,6 +97,10 @@ server.js(入口,10 行)
   tar 家族先 `tar -tvf` 列一遍清单做校验再 `-xf`(多一趟解压,换确定性);
   zip 是面板用 zlib 自己读写的,不依赖 `unzip`,顺带认 zip64 和没有 UTF-8 标志位的 GBK 文件名。
   同一实例的打包/解压串行(`archiveBusy`),打包先写 `.mcsp-archive-*` 再 rename
+- 备份保留策略(`backupKeepCount` 份 / `backupKeepDays` 天,各自 0 为不限)在**每次备份成功后**
+  执行一次,不另开定时器 —— 备份是唯一让 `backups/<iid>/` 变大的动作。两个条件取并集;
+  最新的一份永远保留,否则天数配得比备份间隔还短时会把刚做完的那份也删掉。
+  tar 失败留下的半截包会立即清掉,不然它会一直占着保留份数
 - 登录限速(5 次失败锁 1 分钟);隧道配置输入全部白名单化清洗
 - 全局错误中间件 + `asyncHandler`:异步路由抛错返回 500 JSON,不打崩进程
 

@@ -1442,13 +1442,20 @@ async function loadSystem() {
   loadOauthConfig();   // OAuth 第三方登录配置卡片在本视图内
   const s = await api('/settings');
   $('#sys-reg').checked = !!s.registrationEnabled;
+  $('#sys-bk-count').value = s.backupKeepCount ?? 10;
+  $('#sys-bk-days').value = s.backupKeepDays ?? 30;
   $('#sys-announcement').value = s.announcement || '';
 }
 
 $('#sys-save').addEventListener('click', async () => {
   const r = await api('/settings', {
     method: 'PUT',
-    body: { registrationEnabled: $('#sys-reg').checked, announcement: $('#sys-announcement').value },
+    body: {
+      registrationEnabled: $('#sys-reg').checked,
+      announcement: $('#sys-announcement').value,
+      backupKeepCount: parseInt($('#sys-bk-count').value, 10) || 0,
+      backupKeepDays: parseInt($('#sys-bk-days').value, 10) || 0,
+    },
   });
   if (r.ok) { toast('系统设置已保存'); renderAnnouncement(r.settings); }
   else toast(r.error, true);
