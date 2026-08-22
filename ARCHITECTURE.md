@@ -20,6 +20,7 @@ server.js(入口,10 行)
         ├─ src/backups.js     tar.gz 备份/恢复
         ├─ src/archive.js     压缩包:zip 用 zlib 自读写,tar 家族调系统 tar(均先做安全校验)
         ├─ src/disk.js        磁盘用量:分区 statfs + 每实例体积后台缓存(60s)
+        ├─ src/notify.js      告警推送:通用 Webhook / Discord / Telegram(去重 + 永不抛错)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -110,6 +111,17 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
 上传把剩余额度直接压进流式上限,超额当场断流,不用等收完几个 GB 再拒;
 解压把额度压进 `extractArchive` 的 `maxBytes`,在任何字节落盘前就拒。
 
+## 告警推送(src/notify.js)
+
+五类事件:实例异常退出、重启风暴保护触发、备份失败、计划任务连续失败(≥3 次)、
+宿主机磁盘 ≥90%。目标支持通用 Webhook(POST JSON)、Discord、Telegram,可分别开关。
+
+三条硬约束:
+- **永不影响主流程**:`emit()` 同步返回,内部 fire-and-forget,失败只写面板日志。
+  备份已经失败了,不该再因为 webhook 超时炸第二次。
+- **同事件同对象 5 分钟内只发一次**(`dedupeKey`),否则崩溃重启循环会把群刷爆。
+- 目标地址发送前校验必须是 `http(s)`,挡掉 `file://` 之类,别把面板变成内网探测器。
+
 ## 数据与持久化(data/,gitignore)
 
 | 文件 | 内容 | 写入时机 |
@@ -118,7 +130,7 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
 | sessions.json | 会话 token(7 天 TTL) | 登录/登出,防抖 500ms |
 | instances.json | 实例元数据 + 穿透配置 | 实例/配置变更 |
 | tasks.json | 计划任务 | 任务变更、每次触发 |
-| settings.json | 注册开关、公告、备份保留策略 | 系统设置保存时 |
+| settings.json | 注册开关、公告、备份保留策略、告警推送配置 | 系统设置保存时 |
 | frpc-\<iid\>.toml / playit-\<iid\>.toml | 隧道进程配置/密钥 | 隧道启动/绑定 |
 | ssh/id_ed25519(.pub) | SSH 类隧道专用密钥 | 首次使用时生成 |
 

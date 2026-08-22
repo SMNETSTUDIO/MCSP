@@ -9,6 +9,10 @@ const fsp = require('fs/promises');
 const path = require('path');
 const { ROOT, BACKUPS_DIR } = require('./config');
 const { dirSize } = require('./utils');
+const notify = require('./notify');
+
+/* 磁盘占用超过这个比例就告警一次(去重 5 分钟,由 notify 负责) */
+const DISK_WARN_PCT = 90;
 
 const SCAN_INTERVAL_MS = 60_000;
 
@@ -46,6 +50,15 @@ async function scan() {
   if (scanning) return;
   scanning = true;
   try {
+    const d = await hostDisk();
+    if (d && d.usedPct >= DISK_WARN_PCT) {
+      notify.emit('diskLow', {
+        title: `宿主机磁盘已用 ${d.usedPct}%`,
+        text: `已用 ${(d.usedMB / 1024).toFixed(1)} GB / 共 ${(d.totalMB / 1024).toFixed(1)} GB,`
+          + `剩余 ${(d.freeMB / 1024).toFixed(1)} GB。备份保留策略可在系统设置里收紧。`,
+        dedupeKey: 'host',
+      });
+    }
     const { instances } = require('./registry');
     for (const inst of instances.values()) {
       try { usage.set(inst.id, await measure(inst)); } catch {}

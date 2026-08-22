@@ -14,6 +14,7 @@ const { componentBin, ensureSshKey, sshKeyPath, DEFAULT_TUNNEL } = require('./tu
 const { authlibJarPath, authlibInstalled } = require('./authlib');
 const { mcPing } = require('./mcping');
 const bus = require('./bus');
+const notify = require('./notify');
 
 /* taskset 可用性(util-linux,Linux 标配);缺失时 CPU 限核降级为不限制 */
 const TASKSET_OK = (() => { try { return spawnSync('taskset', ['-V']).status === 0; } catch { return false; } })();
@@ -404,10 +405,22 @@ class Instance {
     if (this._crashTimes.length > CRASH_MAX_RESTARTS) {
       this.autoRestartBlocked = true;
       this.log('ERROR', `[MCSP] ${CRASH_WINDOW_MS / 60000} 分钟内异常退出 ${this._crashTimes.length} 次,已停止自动重启 —— 请查日志排查后手动启动`);
+      notify.emit('restartBlocked', {
+        title: `实例「${this.name}」已停止自动重启`,
+        text: `${CRASH_WINDOW_MS / 60000} 分钟内异常退出 ${this._crashTimes.length} 次,面板已放弃自动拉起。\n`
+          + `最后几行日志:\n` + this.logs.slice(-6).map((l) => `${l.level} ${l.message}`).join('\n'),
+        dedupeKey: this.id,
+      });
       this.emitState();
       return;
     }
     this.log('WARN', `[MCSP] 检测到异常退出,${CRASH_RESTART_DELAY_MS / 1000} 秒后自动重启 (${this._crashTimes.length}/${CRASH_MAX_RESTARTS})`);
+    notify.emit('crash', {
+      title: `实例「${this.name}」异常退出`,
+      text: `${CRASH_RESTART_DELAY_MS / 1000} 秒后将自动重启(第 ${this._crashTimes.length}/${CRASH_MAX_RESTARTS} 次)。\n`
+        + this.logs.slice(-6).map((l) => `${l.level} ${l.message}`).join('\n'),
+      dedupeKey: this.id,
+    });
     this._crashTimer = setTimeout(() => {
       this._crashTimer = null;
       if (this.state !== 'stopped') return;    // 这几秒里用户可能已经自己启动了

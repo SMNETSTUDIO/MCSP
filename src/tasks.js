@@ -4,6 +4,7 @@ const { readJson, writeJson } = require('./utils');
 const { instances } = require('./registry');
 const { createBackup } = require('./backups');
 const bus = require('./bus');
+const notify = require('./notify');
 
 const store = { tasks: readJson(TASKS_FILE, []) };
 const saveTasks = () => writeJson(TASKS_FILE, store.tasks);
@@ -44,6 +45,14 @@ async function runTask(task) {
   inst.log(result.ok ? 'INFO' : 'WARN',
     `[MCSP] 计划任务 "${task.name}" ${result.ok ? '完成' : '未生效'}: ${result.msg}`
     + (task.failStreak > 1 ? ` (已连续 ${task.failStreak} 次未成功)` : ''));
+  // 偶尔一次失败不值得吵醒人,连续三次说明是真的坏了
+  if (task.failStreak >= 3) {
+    notify.emit('taskFailed', {
+      title: `计划任务「${task.name}」连续 ${task.failStreak} 次未成功`,
+      text: `实例:${inst.name}\n任务:${taskScheduleText(task)}\n最后一次结果:${result.msg}`,
+      dedupeKey: task.id,
+    });
+  }
   bus.broadcast('tasks', { iid: task.iid });
   return task.lastResult;
 }

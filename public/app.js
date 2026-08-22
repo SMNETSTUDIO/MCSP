@@ -1686,6 +1686,62 @@ $('#user-list').addEventListener('click', async (e) => {
 
 /* ───────── system settings & announcement (admin) ───────── */
 
+const NOTIFY_EVENTS = {
+  crash: '实例异常退出',
+  restartBlocked: '重启风暴保护触发',
+  backupFailed: '备份失败',
+  taskFailed: '计划任务连续失败',
+  diskLow: '磁盘空间不足(≥90%)',
+};
+
+function notifyBody() {
+  const events = {};
+  $$('#nt-events [data-nev]').forEach((c) => { events[c.dataset.nev] = c.checked; });
+  return {
+    enabled: $('#nt-enabled').checked,
+    webhookUrl: $('#nt-webhook').value.trim(),
+    discordUrl: $('#nt-discord').value.trim(),
+    telegramToken: $('#nt-tgtoken').value.trim(),
+    telegramChatId: $('#nt-tgchat').value.trim(),
+    events,
+  };
+}
+
+function renderNotify(n) {
+  n = n || {};
+  $('#nt-enabled').checked = !!n.enabled;
+  $('#nt-webhook').value = n.webhookUrl || '';
+  $('#nt-discord').value = n.discordUrl || '';
+  $('#nt-tgtoken').value = n.telegramToken || '';
+  $('#nt-tgchat').value = n.telegramChatId || '';
+  const ev = n.events || {};
+  $('#nt-events').innerHTML = Object.entries(NOTIFY_EVENTS).map(([k, label]) => `
+    <div class="prop-row"><label>${label}</label>
+      <label class="switch prop-switch"><input type="checkbox" data-nev="${k}" ${ev[k] !== false ? 'checked' : ''}><span class="slider"></span></label>
+    </div>`).join('');
+  const badge = $('#nt-status');
+  badge.textContent = n.enabled ? '已启用' : '未启用';
+  badge.className = `task-badge ${n.enabled ? '' : 'off'}`;
+}
+
+$('#nt-save').addEventListener('click', async () => {
+  const r = await api('/settings', { method: 'PUT', body: { notify: notifyBody() } });
+  if (r.ok) { renderNotify(r.settings.notify); toast('告警配置已保存'); }
+  else toast(r.error, true);
+});
+
+$('#nt-test').addEventListener('click', async () => {
+  const btn = $('#nt-test');
+  btn.disabled = true;
+  $('#nt-result').textContent = '正在发送…';
+  const r = await api('/settings/notify/test', { method: 'POST', body: { notify: notifyBody() } });
+  btn.disabled = false;
+  const results = (r && r.results) || [];
+  $('#nt-result').innerHTML = results.map((x) =>
+    `<span class="${x.ok ? 'task-result ok' : 'task-result bad'}">${x.ok ? '✔' : '✘'} ${escapeHtml(x.name)}${x.ok ? '' : ': ' + escapeHtml(x.error || '')}</span>`).join(' &nbsp; ')
+    || '没有配置任何推送目标';
+});
+
 async function loadSystem() {
   loadOauthConfig();   // OAuth 第三方登录配置卡片在本视图内
   const s = await api('/settings');
@@ -1693,6 +1749,7 @@ async function loadSystem() {
   $('#sys-bk-count').value = s.backupKeepCount ?? 10;
   $('#sys-bk-days').value = s.backupKeepDays ?? 30;
   $('#sys-announcement').value = s.announcement || '';
+  renderNotify(s.notify);
 }
 
 $('#sys-save').addEventListener('click', async () => {

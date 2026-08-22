@@ -552,6 +552,34 @@
 
         <div class="card glass" style="margin-top:18px">
           <div class="card-title row-between">
+            <span>告警推送 <span class="task-badge off" id="nt-status">未启用</span></span>
+            <span>
+              <button class="icon-btn" id="nt-test">发送测试</button>
+              <button class="btn btn-blue" id="nt-save">保存</button>
+            </span>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row">
+              <label>启用告警推送</label>
+              <label class="switch prop-switch"><input type="checkbox" id="nt-enabled"><span class="slider"></span></label>
+            </div>
+            <div class="prop-row"><label>通用 Webhook(POST JSON)</label><input id="nt-webhook" placeholder="https://…" /></div>
+            <div class="prop-row"><label>Discord Webhook</label><input id="nt-discord" placeholder="https://discord.com/api/webhooks/…" /></div>
+            <div class="prop-row"><label>Telegram Bot Token</label><input id="nt-tgtoken" type="password" autocomplete="new-password" placeholder="123456:ABC-…" /></div>
+            <div class="prop-row"><label>Telegram Chat ID</label><input id="nt-tgchat" placeholder="-1001234567890" /></div>
+          </div>
+          <div class="card-title" style="margin-top:16px;font-size:13px">推送哪些事件</div>
+          <div class="props-grid" id="nt-events"></div>
+          <div class="dim small" id="nt-result" style="margin-top:12px"></div>
+          <div class="dim small" style="margin-top:12px">
+            通用 Webhook 收到的是 <code>{source,event,label,title,text,at}</code> 的 JSON,可对接 Bark / 钉钉 / 飞书 / n8n 等。
+            同一事件同一对象 <b>5 分钟内只推一次</b>,崩溃重启循环不会把群刷爆。
+            推送失败只写面板日志,绝不影响实例本身 —— 备份已经失败了,不该再因为 webhook 超时炸第二次。
+          </div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
             <span>OAuth 第三方登录 <span class="task-badge off" id="og-status">未启用</span></span>
             <button class="btn btn-blue" id="og-save">保存</button>
           </div>

@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { BACKUPS_DIR } = require('./config');
 const settings = require('./settings');
+const notify = require('./notify');
 
 function backupDir(inst) {
   const d = path.join(BACKUPS_DIR, inst.id);
@@ -64,6 +65,11 @@ function createBackup(inst, name) {
         resolve({ ok: true });
       } else {
         inst.log('ERROR', `[MCSP] 备份失败 (tar exit ${code})`);
+        notify.emit('backupFailed', {
+          title: `实例「${inst.name}」备份失败`,
+          text: `tar 退出码 ${code}。目标文件 ${path.basename(out)} 已清理。`,
+          dedupeKey: inst.id,
+        });
         // 失败会留下半截的 tar.gz,不删掉它会一直占着保留份数
         fs.rmSync(out, { force: true });
         resolve({ ok: false, error: `tar 退出码 ${code}` });
