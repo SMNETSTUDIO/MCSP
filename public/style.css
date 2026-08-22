@@ -1369,3 +1369,14 @@ body {
 
 .chip.danger { color: var(--red); border-color: rgba(255, 69, 58, 0.35); }
 .chip.danger:hover { background: rgba(255, 69, 58, 0.25); }
+
+/* ── 服务器图标 ── */
+.icon-row { display: flex; align-items: center; gap: 16px; }
+.icon-preview {
+  width: 64px; height: 64px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  border-radius: 10px; background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12); overflow: hidden;
+}
+.icon-preview img { width: 64px; height: 64px; image-rendering: pixelated; }
+[data-theme="light"] .icon-preview { background: rgba(0, 0, 0, 0.05); border-color: rgba(0, 0, 0, 0.12); }

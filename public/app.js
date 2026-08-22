@@ -451,6 +451,25 @@ async function loadTypeVersions() {
   await fillVersions('#ni-type', '#ni-version');
 }
 
+/* 批量启停:只对状态确实需要变的实例发指令,并且逐个发 ——
+   一口气 spawn 十个 JVM 会把磁盘顶满,谁都起不来(和面板重启恢复同一个道理) */
+async function bulkPower(action) {
+  const want = action === 'start' ? 'stopped' : 'running';
+  const targets = [...instMap.values()].filter((i) => i.state === want);
+  if (!targets.length) return toast(action === 'start' ? '没有已停止的实例' : '没有正在运行的实例');
+  if (!confirm(`${action === 'start' ? '启动' : '停止'} ${targets.length} 个实例?\n\n` + targets.map((i) => '· ' + i.name).join('\n'))) return;
+  let okCount = 0;
+  for (const inst of targets) {
+    const r = await api(`/instances/${inst.id}/server/${action}`, { method: 'POST' });
+    if (r.ok) okCount++;
+    else toast(`${inst.name}: ${r.error}`, true);
+    if (action === 'start') await new Promise((r2) => setTimeout(r2, 3000));   // 错峰
+  }
+  toast(`${okCount}/${targets.length} 个实例已${action === 'start' ? '启动' : '停止'}`);
+}
+$('#bulk-start').addEventListener('click', () => bulkPower('start'));
+$('#bulk-stop').addEventListener('click', () => bulkPower('stop'));
+
 $('#inst-create').addEventListener('click', async () => {
   $('#inst-modal').hidden = false;
   $('#ni-name').focus();
@@ -635,6 +654,49 @@ function appendLog(entry) {
   }
 }
 
+/* Tab 补全:MC 常用命令 + 当前在线玩家名。和已有的 ↑↓ 历史凑成一个像样的终端 */
+const MC_COMMANDS = [
+  'list', 'say', 'tell', 'me', 'kick', 'ban', 'ban-ip', 'pardon', 'pardon-ip', 'banlist',
+  'op', 'deop', 'whitelist add', 'whitelist remove', 'whitelist list', 'whitelist on', 'whitelist off', 'whitelist reload',
+  'gamemode survival', 'gamemode creative', 'gamemode adventure', 'gamemode spectator',
+  'difficulty peaceful', 'difficulty easy', 'difficulty normal', 'difficulty hard',
+  'time set day', 'time set night', 'time set noon', 'time set midnight', 'time add',
+  'weather clear', 'weather rain', 'weather thunder',
+  'gamerule keepInventory true', 'gamerule doDaylightCycle', 'gamerule doMobSpawning', 'gamerule randomTickSpeed',
+  'give', 'tp', 'teleport', 'kill', 'clear', 'effect give', 'effect clear', 'enchant', 'xp',
+  'save-all', 'save-on', 'save-off', 'stop', 'reload confirm', 'seed', 'difficulty',
+  'setworldspawn', 'spawnpoint', 'defaultgamemode', 'setblock', 'fill', 'locate structure',
+  'tps', 'plugins', 'version', 'timings on', 'timings off', 'mspt',
+];
+
+function completionPool() {
+  const names = $$('#player-list .player-name').map((el) => el.textContent.trim().split(' ')[0]).filter(Boolean);
+  return MC_COMMANDS.concat(names);
+}
+
+/** 最长公共前缀 —— 和 shell 的 Tab 行为一致:先补到分歧点,再按一次列出候选 */
+function commonPrefix(list) {
+  if (!list.length) return '';
+  let p = list[0];
+  for (const s of list) {
+    let i = 0;
+    while (i < p.length && i < s.length && p[i].toLowerCase() === s[i].toLowerCase()) i++;
+    p = p.slice(0, i);
+  }
+  return p;
+}
+
+function handleTabComplete(input) {
+  const val = input.value;
+  if (!val.trim()) return;
+  const matches = completionPool().filter((c) => c.toLowerCase().startsWith(val.toLowerCase()));
+  if (!matches.length) return;
+  if (matches.length === 1) { input.value = matches[0] + ' '; return; }
+  const pre = commonPrefix(matches);
+  if (pre.length > val.length) input.value = pre;
+  else appendLog({ time: '', level: 'INFO', message: `[补全] ${matches.slice(0, 24).join('  ')}${matches.length > 24 ? ' …' : ''}` });
+}
+
 async function sendCommand() {
   const input = $('#cmd-input');
   const command = input.value.trim();
@@ -654,6 +716,9 @@ $('#cmd-input').addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowDown') {
     if (cmdHistoryIdx < cmdHistory.length - 1) { cmdHistoryIdx++; e.target.value = cmdHistory[cmdHistoryIdx]; }
     else { cmdHistoryIdx = cmdHistory.length; e.target.value = ''; }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();                 // 否则焦点会跳到「发送」按钮上
+    handleTabComplete(e.target);
   }
 });
 $$('.chip[data-cmd]').forEach((c) =>
@@ -675,10 +740,13 @@ async function loadPlayers() {
   } else {
     list.innerHTML = d.online.map((p) => `
       <div class="player-item">
-        <div class="avatar" style="background:${avatarColor(p.name)}">${p.name[0].toUpperCase()}</div>
+        ${p.uuid
+          ? `<img class="avatar" src="https://mc-heads.net/avatar/${escapeHtml(p.uuid)}/32" alt=""
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'avatar',textContent:'${escapeHtml(p.name[0].toUpperCase())}',style:'background:${avatarColor(p.name)}'}))">`
+          : `<div class="avatar" style="background:${avatarColor(p.name)}">${escapeHtml(p.name[0].toUpperCase())}</div>`}
         <div>
           <div class="player-name">${escapeHtml(p.name)} ${p.op ? '<span title="OP">👑</span>' : ''}</div>
-          <div class="player-meta">${p.op ? 'OP · ' : ''}在线</div>
+          <div class="player-meta">${p.op ? 'OP · ' : ''}在线${p.uuid ? ` · <code class="dim">${escapeHtml(p.uuid.slice(0, 8))}…</code>` : ''}</div>
         </div>
         <div class="spacer"></div>
         <button class="icon-btn ${p.op ? 'gold' : ''}" data-act="${p.op ? 'deop' : 'op'}" data-name="${p.name}">${p.op ? '取消OP' : '设为OP'}</button>
@@ -688,7 +756,13 @@ async function loadPlayers() {
   }
 
   $('#ban-list').innerHTML = d.banned.length
-    ? d.banned.map((n) => `<span class="tag">${escapeHtml(n)}<button data-act="pardon" data-name="${n}" title="解封">×</button></span>`).join('')
+    ? d.banned.map((b) => {
+        const when = b.created ? String(b.created).slice(0, 10) : '';
+        const tip = [b.reason && `理由: ${b.reason}`, when && `时间: ${when}`, b.source && `操作者: ${b.source}`]
+          .filter(Boolean).join('\n');
+        return `<span class="tag" title="${escapeHtml(tip)}">${escapeHtml(b.name)}${b.reason
+          ? `<span class="dim small">· ${escapeHtml(b.reason.slice(0, 20))}</span>` : ''}<button data-act="pardon" data-name="${escapeHtml(b.name)}" title="解封">×</button></span>`;
+      }).join('')
     : '<div class="empty">暂无封禁玩家</div>';
 
   $('#wl-list').innerHTML = d.whitelist.length
@@ -699,7 +773,15 @@ async function loadPlayers() {
 $('#view-players').addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
-  const r = await iapi(`/players/${encodeURIComponent(btn.dataset.name)}/${btn.dataset.act}`, { method: 'POST' });
+  const act = btn.dataset.act;
+  const body = {};
+  // 封禁/踢出可以带理由 —— 玩家在客户端上看到的就是这句话
+  if (act === 'ban' || act === 'kick') {
+    const reason = prompt(`${act === 'ban' ? '封禁' : '踢出'} ${btn.dataset.name} 的理由(可留空,玩家会看到):`, '');
+    if (reason === null) return;
+    body.reason = reason.trim();
+  }
+  const r = await iapi(`/players/${encodeURIComponent(btn.dataset.name)}/${act}`, { method: 'POST', body });
   r.ok ? loadPlayers() : toast(r.error, true);
 });
 
@@ -1098,6 +1180,52 @@ async function fmArchive(format) {
   toast(`已生成 ${r.name}(${r.files} 个文件,${fmtSize(r.size)})`);
   loadFiles(fmPath);
 }
+
+/* ── 服务器图标 ── */
+
+async function loadServerIcon() {
+  const d = await iapi('/files?path=/');
+  const has = d.ok && d.entries.some((e) => e.name === 'server-icon.png');
+  $('#ic-del').hidden = !has;
+  $('#ic-preview').innerHTML = has
+    // 带上时间戳,不然换了图还是显示浏览器缓存里那张
+    ? `<img src="/api/instances/${currentIid}/files/download?path=%2Fserver-icon.png&t=${Date.now()}" alt="server-icon">`
+    : '<span class="dim small">未设置</span>';
+}
+
+$('#ic-pick').addEventListener('click', () => $('#ic-input').click());
+$('#ic-input').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (f.type !== 'image/png') return toast('必须是 PNG', true);
+  // 先在浏览器里量一下尺寸,不合规就别浪费一次上传 —— 服务端也只会默默忽略
+  const dim = await new Promise((res) => {
+    const img = new Image();
+    img.onload = () => res([img.naturalWidth, img.naturalHeight]);
+    img.onerror = () => res(null);
+    img.src = URL.createObjectURL(f);
+  });
+  if (!dim) return toast('不是有效的 PNG', true);
+  if (dim[0] !== 64 || dim[1] !== 64) {
+    return toast(`必须是 64×64,当前是 ${dim[0]}×${dim[1]} —— Minecraft 会忽略尺寸不对的图标`, true);
+  }
+  const r = await uploadOne(f, '/', true, () => {});
+  if (!r.ok) return toast(r.error, true);
+  // 上传接口按原文件名保存,这里要的是固定名,传完改一下
+  if (f.name !== 'server-icon.png') {
+    const rn = await iapi('/files/rename', { method: 'POST', body: { path: '/' + f.name, name: 'server-icon.png' } });
+    if (!rn.ok) return toast(`已上传但改名失败: ${rn.error}`, true);
+  }
+  toast('图标已更新,重启实例后生效');
+  loadServerIcon();
+});
+
+$('#ic-del').addEventListener('click', async () => {
+  if (!confirm('删除 server-icon.png ?')) return;
+  const r = await iapi('/files?path=%2Fserver-icon.png', { method: 'DELETE' });
+  r.ok ? (toast('已删除'), loadServerIcon()) : toast(r.error, true);
+});
 
 /* ── 常见配置文件快捷入口 ── */
 
@@ -1566,6 +1694,7 @@ async function loadProperties() {
   $('#cfg-jvm').value = status.jvmArgs || '';
   loadReinstall(status);
   loadConfigs();
+  loadServerIcon();
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);

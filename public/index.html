@@ -126,6 +126,8 @@
         </div>
         <div class="overview-head">
           <div class="card-title" style="margin:0">实例列表</div>
+          <button class="icon-btn" id="bulk-start">▶ 全部启动</button>
+          <button class="icon-btn danger" id="bulk-stop">■ 全部停止</button>
           <button class="btn btn-blue" id="inst-create">＋ 新建实例</button>
         </div>
         <div class="inst-grid" id="inst-grid"></div>
@@ -476,6 +478,23 @@
             外置登录通过 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
             将玩家认证转发到皮肤站的 Yggdrasil API(如 LittleSkin)。启用后首次保存会自动下载 authlib-injector;
             服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。
+          </div>
+        </div>
+        <div class="card glass" id="icon-card" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>服务器图标 <span class="dim small">玩家在多人列表里看到的那张图</span></span>
+            <span>
+              <button class="icon-btn" id="ic-pick">⬆ 上传 PNG</button>
+              <button class="icon-btn danger" id="ic-del" hidden>删除</button>
+              <input type="file" id="ic-input" accept="image/png" hidden />
+            </span>
+          </div>
+          <div class="icon-row">
+            <div class="icon-preview" id="ic-preview"><span class="dim small">未设置</span></div>
+            <div class="dim small">
+              Minecraft 只认实例根目录下 <code>64×64</code> 的 <code>server-icon.png</code>,尺寸不对服务端会直接忽略。<br>
+              上传后需<b>重启实例</b>才会生效。
+            </div>
           </div>
         </div>
         <div class="card glass" id="cfg-files-card" style="margin-bottom:18px" hidden>

@@ -379,9 +379,15 @@ router.post('/:iid/command', (req, res) => {
 
 router.get('/:iid/players', (req, res) => {
   const inst = req.inst;
+  // usercache.json 是服务端自己维护的 名字↔UUID 映射,拿它给在线玩家补 UUID,
+  // 前端就能显示真实皮肤头像而不是首字母色块
+  const uuidOf = new Map(inst.readServerJson('usercache.json').map((u) => [String(u.name).toLowerCase(), u.uuid]));
   res.json({
-    online: inst.playerList(),
-    banned: inst.readServerJson('banned-players.json').map((b) => b.name),
+    online: inst.playerList().map((p) => ({ ...p, uuid: uuidOf.get(p.name.toLowerCase()) || null })),
+    // 封禁保留 reason / created / source —— 半年后回头看"这人为什么被封"全靠它
+    banned: inst.readServerJson('banned-players.json').map((b) => ({
+      name: b.name, reason: b.reason || '', created: b.created || '', source: b.source || '', expires: b.expires || 'forever',
+    })),
     whitelist: inst.readServerJson('whitelist.json').map((w) => w.name),
     ops: inst.readServerJson('ops.json').map((o) => o.name),
   });
@@ -390,9 +396,11 @@ router.get('/:iid/players', (req, res) => {
 router.post('/:iid/players/:name/:action', (req, res) => {
   const { name, action } = req.params;
   if (!/^[\w.-]{1,16}$/.test(name)) return res.status(400).json({ ok: false, error: '玩家名非法' });
+  // 理由是自由文本,但要过 stdin 到服务端控制台 —— 去掉换行免得被当成第二条命令
+  const reason = String((req.body && req.body.reason) || '').replace(/[\r\n]/g, ' ').trim().slice(0, 120);
   const map = {
-    kick: `kick ${name}`,
-    ban: `ban ${name}`,
+    kick: `kick ${name}${reason ? ' ' + reason : ''}`,
+    ban: `ban ${name}${reason ? ' ' + reason : ''}`,
     pardon: `pardon ${name}`,
     op: `op ${name}`,
     deop: `deop ${name}`,
