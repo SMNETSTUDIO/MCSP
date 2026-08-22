@@ -314,6 +314,7 @@ function renderInstGrid() {
     const [txt, pillCls] = STATE_TEXT[i.state] || STATE_TEXT.stopped;
     return `
       <div class="card glass inst-card" data-iid="${i.id}" data-state="${i.state}">
+        <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)">⧉</button>
         <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例">✕</button>
         <div class="inst-head">
           <div class="inst-ico">${i.icon}</div>
@@ -355,6 +356,23 @@ $('#host-grid').addEventListener('click', async (e) => {
 });
 
 $('#inst-grid').addEventListener('click', async (e) => {
+  const clone = e.target.closest('[data-clone]');
+  if (clone) {
+    e.stopPropagation();
+    const src = instMap.get(clone.dataset.clone);
+    if (src && src.state !== 'stopped') return toast('请先停止源实例再克隆', true);
+    const name = prompt('克隆为新实例,名称:', src ? src.name + ' 副本' : '');
+    if (!name || !name.trim()) return;
+    clone.disabled = true;
+    toast('正在复制世界与配置,大存档可能要等一会…');
+    const r = await api(`/instances/${clone.dataset.clone}/clone`, { method: 'POST', body: { name: name.trim() } });
+    clone.disabled = false;
+    if (r.ok) {
+      toast(r.port ? `已克隆为「${r.instance.name}」,端口 ${r.port}` : `已克隆为「${r.instance.name}」,请手动设置端口`);
+      loadOverview();
+    } else toast(r.error, true);
+    return;
+  }
   const del = e.target.closest('[data-del]');
   if (del) {
     e.stopPropagation();

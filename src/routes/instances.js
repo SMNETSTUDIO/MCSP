@@ -11,7 +11,7 @@ const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
 const { users: authUsers } = require('../auth');
 const { Instance, sanitizeJvmArgs } = require('../instance');
-const { instances, saveRegistry, installInstance, reinstallInstance } = require('../registry');
+const { instances, saveRegistry, installInstance, reinstallInstance, cloneInstance } = require('../registry');
 const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
 const { store: taskStore, saveTasks, taskScheduleText, runTask } = require('../tasks');
@@ -244,6 +244,25 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
   saveRegistry();
   inst.emitState();
   res.json({ ok: true, instance: inst.snapshot() });
+}));
+
+/* 克隆:复制整个实例目录,换 id / 名字 / 端口。受实例数、内存、磁盘三项配额约束。 */
+router.post('/:iid/clone', asyncHandler(async (req, res) => {
+  const src = req.inst;
+  const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ ok: false, error: '新实例名称不能为空' });
+  // 边跑边拷世界会拿到一份撕裂的存档,而且往往要等玩家进服才暴露
+  if (src.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止源实例再克隆' });
+
+  const qerr = quotaError(req, src.xmx, true);
+  if (qerr) return res.status(403).json({ ok: false, error: qerr });
+  const dqerr = diskQuotaError(req, disk.instanceUsage(src.id).instMB);
+  if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
+
+  const { inst, port } = await cloneInstance(src, { name, owner: req.user.username });
+  disk.refresh(inst.id);
+  if (!port) inst.log('WARN', '[MCSP] 没找到空闲端口,请手动修改 server-port 后再启动');
+  res.json({ ok: true, instance: inst.snapshot(), port });
 }));
 
 /* 重装 / 升级:换服务端 jar,保留世界与全部配置。默认先自动备份一份。 */

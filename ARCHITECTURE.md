@@ -41,6 +41,9 @@ server.js(入口,10 行)
     (内存配额就是靠 `-Xmx` 落地的,放行等于让普通用户自己改配额)与 `-jar`/`-cp`/`@file`
     (会改变到底启动了什么)。参数进的是 `spawn` 的 argv 数组、不过 shell,没有命令注入面
   - stdout/stderr 按行解析:`Done (…s)!` → running;`joined/left the game` → 玩家表
+  - `spawn` 本身失败(最常见:没装 Java,ENOENT)时 Node 不保证还会发 `'exit'`,
+    所以 `'error'` 回调里要在 `proc.pid` 为空时自己收尾 —— 否则实例永远卡在
+    `starting`,既停不掉也起不来
   - stop = stdin 写 `stop`(优雅存档),30s 超时 SIGKILL;exit 事件统一复位状态
   - **崩溃自动重启**:退出码非 0 且不是 stop/kill/面板关停引起的,5s 后自动拉起。
     10 分钟内超过 3 次就置 `autoRestartBlocked` 停手 —— 端口占用、jar 损坏这类
@@ -72,6 +75,16 @@ server.js(入口,10 行)
 旧 jar 改了名才删(避免目录里堆历史版本)。代理换成服务端时补 `eula.txt` 与最小
 `server.properties`,已存在则一概不动;按新类型的 `dataDir` 建 `plugins/` 或 `mods/`。
 默认在动手前跑一次完整备份 —— MC 不支持世界降级,换版本可能是不可逆的。
+
+## 克隆(registry.js `cloneInstance`)
+
+复制实例目录,换 id / 名字 / 端口。要求源实例已停止 —— 边跑边拷世界会拿到一份
+撕裂的存档,而那种损坏往往要等玩家进服才暴露。
+
+端口必须换(`findFreePort` 跳过其它实例已配的端口和当前 LISTEN 的端口),否则
+两个实例永远只能开一个。隧道配置**不继承**:里面有 token 和固定远程端口,
+两个实例同时用会互相打架。`logs/` `crash-reports/` `cache/` 不复制 —— 前两个是
+上一个实例的历史,后者重新生成即可,整合包的 cache 可能有好几个 G。
 
 ## 磁盘用量(src/disk.js)
 

@@ -310,6 +310,16 @@ class Instance {
 
     proc.on('error', (err) => {
       this.log('ERROR', `[MCSP] 进程错误: ${err.message}`);
+      // spawn 本身失败时(最常见:没装 Java,ENOENT)Node 不保证还会发 'exit',
+      // 不自己收尾的话实例会永远卡在 starting —— 既停不掉也起不来。
+      // proc.pid 为空即代表根本没起来,和"起来了再崩"要分开处理。
+      if (this.proc === proc && !proc.pid) {
+        this.proc = null;
+        this.state = 'stopped';
+        this.startedAt = null;
+        this._setWasRunning(false);      // 起都没起来,别让面板重启后还去恢复它
+        this.emitState();
+      }
     });
 
     proc.on('exit', (code, signal) => {
@@ -826,4 +836,4 @@ class Instance {
   }
 }
 
-module.exports = { Instance, panel, sanitizeJvmArgs };
+module.exports = { Instance, panel, sanitizeJvmArgs, listeningPorts };

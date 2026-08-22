@@ -1,11 +1,12 @@
 /** 实例注册表:加载/持久化实例元数据,新实例的下载安装流程 */
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { REGISTRY_FILE } = require('./config');
 const { readJson, writeJson } = require('./utils');
-const { Instance } = require('./instance');
+const { Instance, listeningPorts } = require('./instance');
 const { TYPES, resolveDownload } = require('./servertypes');
 const { resolveJavaBin } = require('./java');
 const bus = require('./bus');
@@ -201,6 +202,62 @@ async function installInstance(inst, { port, gamemode, motd }) {
   bus.broadcast('instances', {});
 }
 
+/* 克隆时不值得复制的目录:日志和崩溃报告属于"上一个实例的历史",
+   缓存重新生成即可。整合包的 cache/ 可能有好几个 G。 */
+const CLONE_SKIP = new Set(['logs', 'crash-reports', 'cache']);
+
+/** 从 from 起找一个没被别的实例占用、也没在 LISTEN 的端口 */
+function findFreePort(from) {
+  const taken = new Set([...instances.values()].map((i) => parseInt(i.getProp('server-port'), 10)).filter(Boolean));
+  for (let p = from; p < from + 200 && p < 65536; p++) {
+    if (!taken.has(p) && !listeningPorts().has(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * 克隆实例:复制目录,换 id / 名字 / 端口,隧道配置不继承。
+ * 要求源实例已停止 —— 边跑边拷世界会拿到一份撕裂的存档,
+ * 那种损坏往往要等玩家进服才暴露。
+ */
+async function cloneInstance(src, { name, owner }) {
+  const id = crypto.randomUUID().slice(0, 8);
+  const inst = new Instance({
+    ...src.meta(),
+    id,
+    name,
+    owner,
+    // 隧道配置带着 token / 固定远程端口,两个实例同时用会互相打架
+    tunnel: undefined,
+    wasRunning: false,
+    createdAt: Date.now(),
+  });
+
+  await fsp.cp(src.dir, inst.dir, {
+    recursive: true,
+    filter: (from) => {
+      const rel = path.relative(src.dir, from);
+      return !rel || !CLONE_SKIP.has(rel.split(path.sep)[0]);
+    },
+  });
+
+  // 端口必须换掉,否则两个实例永远只能开一个
+  const srcPort = parseInt(src.getProp('server-port'), 10) || 25565;
+  const port = findFreePort(srcPort + 1);
+  if (port) {
+    const props = inst.readProps();
+    props['server-port'] = String(port);
+    inst.writeProps(props);
+  }
+  inst.invalidatePropsCache();
+
+  instances.set(id, inst);
+  saveRegistry();
+  inst.log('INFO', `[MCSP] 由「${src.name}」克隆而来${port ? `,端口已改为 ${port}` : ''}`);
+  bus.broadcast('instances', {});
+  return { inst, port };
+}
+
 /**
  * 重装 / 升级:只换服务端本体,世界、插件、server.properties 全部原样保留。
  *
@@ -271,4 +328,4 @@ async function reinstallInstance(inst, { type, version, backup }) {
   bus.broadcast('instances', {});
 }
 
-module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, resumeInstances, installInstance, reinstallInstance };
+module.exports = { instances, saveRegistry, loadRegistry, startMetricsLoop, resumeInstances, installInstance, reinstallInstance, cloneInstance };
