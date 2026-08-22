@@ -9,6 +9,7 @@ const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB } = require('../con
 const { asyncHandler, dirSize } = require('../utils');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
+const modrinth = require('../modrinth');
 const { users: authUsers } = require('../auth');
 const { Instance, sanitizeJvmArgs } = require('../instance');
 const { instances, saveRegistry, installInstance, reinstallInstance, cloneInstance } = require('../registry');
@@ -459,6 +460,77 @@ router.get('/:iid/plugins', (req, res) => {
   } catch {}
   res.json({ ok: true, dir: ext.name, kind: ext.kind, noun: ext.noun, items });
 });
+
+/* Modrinth 在线搜索 —— 按当前实例的 loader 与 MC 版本过滤,搜出来的都是装得上的 */
+router.get('/:iid/plugins/search', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  if (!extDir(inst)) return res.status(400).json({ ok: false, error: '该服务端类型不支持插件或模组' });
+  try {
+    const r = await modrinth.search({ query: req.query.q, type: inst.type, version: inst.version });
+    res.json({ ok: true, ...r });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: `搜索失败: ${err.message}` });
+  }
+}));
+
+router.get('/:iid/plugins/versions/:projectId', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  try {
+    // 先按当前 MC 版本查;一个都没有时放宽版本,让用户自己判断要不要装
+    let list = await modrinth.versions({ projectId: req.params.projectId, type: inst.type, version: inst.version });
+    let exact = true;
+    if (!list.length) {
+      list = await modrinth.versions({ projectId: req.params.projectId, type: inst.type });
+      exact = false;
+    }
+    res.json({ ok: true, exact, versions: list.slice(0, 20) });
+  } catch (err) {
+    res.status(502).json({ ok: false, error: `获取版本失败: ${err.message}` });
+  }
+}));
+
+router.post('/:iid/plugins/install', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const ext = extDir(inst);
+  if (!ext) return res.status(400).json({ ok: false, error: '该服务端类型不支持插件或模组' });
+  const { projectId, versionId } = req.body || {};
+  if (!projectId || !/^[\w-]{1,32}$/.test(String(projectId))) return res.status(400).json({ ok: false, error: '项目 ID 无效' });
+  if (versionId && !/^[\w-]{1,32}$/.test(String(versionId))) return res.status(400).json({ ok: false, error: '版本 ID 无效' });
+
+  const dqerr = diskQuotaError(req, 64);      // jar 一般几 MB,给个宽松的预检额度
+  if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
+
+  try {
+    const r = await modrinth.install({
+      projectId, versionId, type: inst.type, version: inst.version,
+      destDir: path.join(inst.dir, ext.name),
+    });
+    disk.bump(inst.id, r.size / 1048576);
+    inst.log('INFO', `[MCSP] 已安装${ext.noun} ${r.filename} (${(r.size / 1048576).toFixed(1)} MB${r.verified ? ', SHA-1 校验通过' : ''})`
+      + (inst.state === 'running' ? ',重启后生效' : ''));
+    res.json({ ok: true, ...r, noun: ext.noun });
+  } catch (err) {
+    inst.log('ERROR', `[MCSP] 安装失败: ${err.message}`);
+    res.status(502).json({ ok: false, error: err.message });
+  }
+}));
+
+/* 删除插件/模组 —— 此前只能启停,想删得去文件管理器 */
+router.delete('/:iid/plugins/:id', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const ext = extDir(inst);
+  if (!ext) return res.status(400).json({ ok: false, error: '该服务端类型不支持插件或模组' });
+  const file = req.params.id;
+  if (!isSafeName(file) || !/\.jar(\.disabled)?$/i.test(file)) {
+    return res.status(400).json({ ok: false, error: '非法文件名' });
+  }
+  const p = path.join(inst.dir, ext.name, file);
+  if (!fs.existsSync(p)) return res.status(404).json({ ok: false, error: `${ext.noun}不存在` });
+  await fsp.rm(p, { force: true });
+  disk.refresh(inst.id);
+  inst.log('INFO', `[MCSP] 已删除${ext.noun} ${file}` + (inst.state === 'running' ? ',重启后生效' : ''));
+  res.json({ ok: true });
+}));
 
 router.post('/:iid/plugins/:id/toggle', (req, res) => {
   const inst = req.inst;

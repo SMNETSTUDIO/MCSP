@@ -246,6 +246,16 @@
 
       <!-- Plugins -->
       <section class="view" id="view-plugins">
+        <div class="card glass" id="pl-search-card" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>在线安装 <span class="dim small">来自 Modrinth,已按当前服务端类型与 MC 版本过滤</span></span>
+            <span>
+              <input id="pl-q" type="search" placeholder="搜索插件 / 模组,如 worldedit" style="width:220px" />
+              <button class="btn btn-blue small-btn" id="pl-go">搜索</button>
+            </span>
+          </div>
+          <div id="pl-results"></div>
+        </div>
         <div id="plugin-list" class="plugin-list"></div>
       </section>
 

@@ -22,6 +22,7 @@ server.js(入口,10 行)
         ├─ src/disk.js        磁盘用量:分区 statfs + 每实例体积后台缓存(60s)
         ├─ src/notify.js      告警推送:通用 Webhook / Discord / Telegram(去重 + 永不抛错)
         ├─ src/audit.js       操作审计:写操作通用中间件 + JSONL 落盘 + 滚动
+        ├─ src/modrinth.js    Modrinth 搜索/安装(loader 映射 + SHA-1 校验)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -122,6 +123,17 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
   备份已经失败了,不该再因为 webhook 超时炸第二次。
 - **同事件同对象 5 分钟内只发一次**(`dedupeKey`),否则崩溃重启循环会把群刷爆。
 - 目标地址发送前校验必须是 `http(s)`,挡掉 `file://` 之类,别把面板变成内网探测器。
+
+## 在线安装插件/模组(src/modrinth.js)
+
+选 Modrinth 是因为它有公开、免 key 的 v2 REST 接口,而且同一套接口同时覆盖
+Bukkit 插件与 Fabric/Forge 模组 —— 面板两种实例都要用。(CurseForge 要申请 key,
+SpigotMC 没有官方下载 API。)
+
+搜索按实例的 loader(paper→paper/spigot/bukkit,fabric→fabric,…)与 MC 版本过滤,
+搜出来的都是装得上的。安装前三道闸:文件名必须是规矩的 `.jar`、下载地址必须是
+`cdn.modrinth.com`、**下完校验 SHA-1**。先写临时文件、校验通过才 rename ——
+这是从公网往用户服务器里放可执行 jar,校验失败绝不能留下半截文件在 `plugins/` 等着被加载。
 
 ## 操作审计(src/audit.js)
 

@@ -767,6 +767,7 @@ async function loadPlugins() {
   const navBtn = $('.nav-item[data-view="plugins"]');
   if (navBtn) navBtn.innerHTML = `<span class="nav-ico">✦</span>${noun}`;
 
+  $('#pl-search-card').hidden = !d.dir;
   if (!d.dir) {
     $('#plugin-list').innerHTML = `<div class="card glass"><div class="empty">
       原版(Vanilla)服务端不支持插件或模组。想装插件请改用 Paper / Purpur / Folia,
@@ -790,8 +791,67 @@ async function loadPlugins() {
         <input type="checkbox" ${p.enabled ? 'checked' : ''} data-plugin="${escapeHtml(p.id)}">
         <span class="slider"></span>
       </label>
+      <button class="icon-btn danger" data-pldel="${escapeHtml(p.id)}">删除</button>
     </div>`).join('');
 }
+
+/* ── Modrinth 在线搜索安装 ── */
+
+async function pluginSearch() {
+  const q = $('#pl-q').value.trim();
+  if (!q) return toast('输入关键词再搜', true);
+  $('#pl-results').innerHTML = '<div class="dim small" style="padding:10px 4px">搜索中…</div>';
+  const d = await iapi(`/plugins/search?q=${encodeURIComponent(q)}`);
+  if (!d.ok) { $('#pl-results').innerHTML = `<div class="dim small" style="padding:10px 4px">${escapeHtml(d.error)}</div>`; return; }
+  if (!d.hits.length) { $('#pl-results').innerHTML = '<div class="dim small" style="padding:10px 4px">没有找到能装在当前服务端上的结果</div>'; return; }
+  $('#pl-results').innerHTML = d.hits.map((h) => `
+    <div class="mr-row">
+      <div class="mr-icon">${h.icon ? `<img src="${escapeHtml(h.icon)}" alt="" loading="lazy">` : '✦'}</div>
+      <div class="mr-body">
+        <div class="mr-title"><a href="${escapeHtml(h.url)}" target="_blank" rel="noopener">${escapeHtml(h.title)}</a>
+          <span class="dim small">by ${escapeHtml(h.author)} · ${(h.downloads / 1000).toFixed(0)}k 下载</span></div>
+        <div class="dim small mr-desc">${escapeHtml(h.description)}</div>
+      </div>
+      <button class="icon-btn" data-mrver="${escapeHtml(h.id)}" data-mrname="${escapeHtml(h.title)}">选版本</button>
+      <button class="btn btn-blue small-btn" data-mrinstall="${escapeHtml(h.id)}" data-mrname="${escapeHtml(h.title)}">安装最新</button>
+    </div>`).join('');
+}
+
+$('#pl-go').addEventListener('click', pluginSearch);
+$('#pl-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') pluginSearch(); });
+
+async function installPlugin(projectId, name, versionId) {
+  toast(`正在下载 ${name}…`);
+  const r = await iapi('/plugins/install', { method: 'POST', body: { projectId, versionId } });
+  if (!r.ok) return toast(r.error, true);
+  toast(`已安装 ${r.filename}${r.verified ? '(校验通过)' : ''},重启实例后生效`);
+  loadPlugins();
+}
+
+$('#pl-results').addEventListener('click', async (e) => {
+  const ins = e.target.closest('[data-mrinstall]');
+  if (ins) { ins.disabled = true; await installPlugin(ins.dataset.mrinstall, ins.dataset.mrname); ins.disabled = false; return; }
+  const ver = e.target.closest('[data-mrver]');
+  if (!ver) return;
+  const d = await iapi(`/plugins/versions/${encodeURIComponent(ver.dataset.mrver)}`);
+  if (!d.ok) return toast(d.error, true);
+  const pick = prompt(
+    `${ver.dataset.mrname} 可用版本` + (d.exact ? '' : '\n⚠ 没有匹配当前 MC 版本的发布,以下是全部版本,装了可能不兼容')
+    + ':\n\n' + d.versions.map((v, i) => `${i + 1}. ${v.versionNumber} [${v.channel}] ${v.gameVersions.slice(0, 4).join(',')}`).join('\n')
+    + '\n\n输入序号:', '1');
+  if (!pick) return;
+  const v = d.versions[parseInt(pick, 10) - 1];
+  if (!v) return toast('序号无效', true);
+  await installPlugin(ver.dataset.mrver, `${ver.dataset.mrname} ${v.versionNumber}`, v.id);
+});
+
+$('#view-plugins').addEventListener('click', async (e) => {
+  const del = e.target.closest('[data-pldel]');
+  if (!del) return;
+  if (!confirm(`删除 ${del.dataset.pldel} ?文件会被真的删掉。`)) return;
+  const r = await iapi(`/plugins/${encodeURIComponent(del.dataset.pldel)}`, { method: 'DELETE' });
+  r.ok ? (toast('已删除'), loadPlugins()) : toast(r.error, true);
+});
 
 $('#view-plugins').addEventListener('change', async (e) => {
   const input = e.target.closest('[data-plugin]');
