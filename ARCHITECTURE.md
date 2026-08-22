@@ -23,6 +23,7 @@ server.js(入口,10 行)
         ├─ src/notify.js      告警推送:通用 Webhook / Discord / Telegram(去重 + 永不抛错)
         ├─ src/audit.js       操作审计:写操作通用中间件 + JSONL 落盘 + 滚动
         ├─ src/modrinth.js    Modrinth 搜索/安装(loader 映射 + SHA-1 校验)
+        ├─ src/rcon.js        RCON 客户端(Source 协议,每命令短连接)
         ├─ src/tunnels.js     隧道组件下载(ngrok/frpc/playit/bore)+ SSH 密钥
         ├─ src/servertypes.js 服务端类型注册表:10 种官方下载源(1h 版本缓存)
         ├─ src/java.js        Java 运行时管理:Temurin 25/21/17/8 下载 + 按 MC 版本挑选
@@ -123,6 +124,15 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
   备份已经失败了,不该再因为 webhook 超时炸第二次。
 - **同事件同对象 5 分钟内只发一次**(`dedupeKey`),否则崩溃重启循环会把群刷爆。
 - 目标地址发送前校验必须是 `http(s)`,挡掉 `file://` 之类,别把面板变成内网探测器。
+
+## 控制台命令的两条通道(src/rcon.js)
+
+`enable-rcon=true` 且配了密码、实例在运行时,`POST /command` 走 RCON,否则走 stdin。
+RCON 出错会**回落 stdin** 并在响应里带上 `rconError`,不让一次配置问题堵死操作。
+
+为什么两条都要:stdin 是单向的,敲 `list` 只能等回显出现在日志流里再猜哪行是它;
+RCON 直接返回这条命令的输出。服务端主线程卡死时 stdin 管道也会跟着堵,RCON 是独立通道。
+每条命令开一个短连接 —— 对面板这种低频操作,省掉保活/重连/并发复用的状态机比省握手值。
 
 ## 在线安装插件/模组(src/modrinth.js)
 

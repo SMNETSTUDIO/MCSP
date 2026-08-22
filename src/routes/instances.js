@@ -10,6 +10,7 @@ const { asyncHandler, dirSize } = require('../utils');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
 const modrinth = require('../modrinth');
+const rcon = require('../rcon');
 const { users: authUsers } = require('../auth');
 const { Instance, sanitizeJvmArgs } = require('../instance');
 const { instances, saveRegistry, installInstance, reinstallInstance, cloneInstance } = require('../registry');
@@ -369,10 +370,62 @@ router.post('/:iid/server/:action', (req, res) => {
   res.json(fn());
 });
 
-router.post('/:iid/command', (req, res) => {
+/**
+ * 执行控制台命令。
+ * server.properties 里开了 enable-rcon 且配了密码时优先走 RCON —— 能拿到这条命令
+ * 的**输出**(stdin 只能把命令喂进去,回显混在日志流里没法对应),服务端卡住时
+ * 也还有一条独立通道。RCON 不通就回落到 stdin,并说明原因。
+ */
+router.post('/:iid/command', asyncHandler(async (req, res) => {
+  const inst = req.inst;
   const { command } = req.body || {};
   if (typeof command !== 'string') return res.status(400).json({ ok: false, error: '缺少 command 字段' });
-  res.json(req.inst.command(command));
+
+  const props = inst.readProps();
+  const useRcon = String(props['enable-rcon']).toLowerCase() === 'true'
+    && props['rcon.password'] && inst.state === 'running';
+
+  if (useRcon) {
+    try {
+      const output = await rcon.exec({
+        port: parseInt(props['rcon.port'], 10) || 25575,
+        password: props['rcon.password'],
+        command,
+      });
+      inst.log('INFO', `[RCON] > ${command}`);
+      // 输出逐行打进控制台,和 stdout 混在一起看着才连贯
+      for (const line of String(output).split('\n')) if (line.trim()) inst.log('INFO', `[RCON] ${line.trim()}`);
+      return res.json({ ok: true, via: 'rcon', output });
+    } catch (err) {
+      inst.log('WARN', `[MCSP] RCON 执行失败,回落到 stdin: ${err.message}`);
+      return res.json({ ...inst.command(command), via: 'stdin', rconError: err.message });
+    }
+  }
+  res.json({ ...inst.command(command), via: 'stdin' });
+}));
+
+/** 一键开启 RCON:写 server.properties 并生成随机密码,重启生效 */
+router.post('/:iid/rcon/enable', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const props = inst.readProps();
+  const port = parseInt(props['rcon.port'], 10) || (parseInt(props['server-port'], 10) || 25565) + 10;
+  props['enable-rcon'] = 'true';
+  props['rcon.port'] = String(port);
+  if (!props['rcon.password']) props['rcon.password'] = crypto.randomBytes(12).toString('base64url');
+  inst.writeProps(props);
+  inst.invalidatePropsCache();
+  inst.log('INFO', `[MCSP] 已开启 RCON (端口 ${port})` + (inst.state === 'running' ? ',重启实例后生效' : ''));
+  res.json({ ok: true, port, needRestart: inst.state === 'running' });
+}));
+
+router.get('/:iid/rcon', (req, res) => {
+  const props = req.inst.readProps();
+  res.json({
+    ok: true,
+    enabled: String(props['enable-rcon']).toLowerCase() === 'true',
+    port: parseInt(props['rcon.port'], 10) || null,
+    hasPassword: !!props['rcon.password'],
+  });
 });
 
 /* ── 玩家:实时解析 + 服务端自己的 JSON 文件 ── */
