@@ -856,14 +856,20 @@ $('#fm-list').addEventListener('click', async (e) => {
   if (!row) return;
   if (row.dataset.type === 'dir') return loadFiles(row.dataset.path);
   if (row.dataset.binary === 'true') return toast('二进制文件无法在线编辑', true);
-  const d = await iapi(`/files/content?path=${encodeURIComponent(row.dataset.path)}`);
+  fmOpenPath(row.dataset.path);
+});
+
+/** 在编辑器里打开某个文件;文件列表与「常见配置」入口共用 */
+async function fmOpenPath(p) {
+  const d = await iapi(`/files/content?path=${encodeURIComponent(p)}`);
   if (!d.ok) return toast(d.error, true);
-  fmOpenFile = row.dataset.path;
-  $('#fm-editor-name').textContent = row.dataset.path;
+  fmOpenFile = p;
+  $('#fm-editor-name').textContent = p;
   $('#fm-content').value = d.content;
   $('#fm-editor').hidden = false;
   $('#fm-content').focus();
-});
+  $('#fm-editor').scrollIntoView({ block: 'nearest' });
+}
 
 $('#fm-save').addEventListener('click', async () => {
   if (!fmOpenFile) return;
@@ -919,6 +925,34 @@ async function fmArchive(format) {
   toast(`已生成 ${r.name}(${r.files} 个文件,${fmtSize(r.size)})`);
   loadFiles(fmPath);
 }
+
+/* ── 常见配置文件快捷入口 ── */
+
+async function loadConfigs() {
+  const d = await iapi('/configs');
+  const list = (d && d.configs) || [];
+  $('#cfg-files-card').hidden = !list.length;
+  if (!list.length) return;
+  $('#cfg-files').innerHTML = list.map((c) => `
+    <div class="cfgfile-row">
+      <div class="cf-name">${escapeHtml(c.name)}</div>
+      <div class="cf-desc dim small">${escapeHtml(c.desc)}</div>
+      <div class="cf-meta dim small">${fmtSize(c.size)} · ${fmtAgo(c.mtime)}</div>
+      <button class="icon-btn" data-cfgedit="${escapeHtml(c.path)}">编辑</button>
+    </div>`).join('');
+}
+
+$('#cfg-files').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-cfgedit]');
+  if (!btn) return;
+  const p = btn.dataset.cfgedit;
+  // 先把 fmPath 挪到目标目录再切视图:switchView 自己会用 fmPath 触发一次加载,
+  // 不先设的话它加载的是旧目录,而且会后于我们这次渲染落地,把面包屑冲掉
+  fmPath = p.slice(0, p.lastIndexOf('/')) || '/';
+  switchView('files');
+  await loadFiles(fmPath);
+  fmOpenPath(p);
+});
 
 /* ── 重装 / 升级 ── */
 
@@ -1352,6 +1386,7 @@ async function loadProperties() {
   $('#cfg-xmx').value = status.xmx || 2048;
   $('#cfg-jvm').value = status.jvmArgs || '';
   loadReinstall(status);
+  loadConfigs();
   $('#cfg-autorestart').checked = status.autoRestart !== false;
   $('#cfg-autostart').checked = status.autoStart !== false;
   $('#cfg-ygg-on').checked = !!(status.yggdrasil && status.yggdrasil.enabled);

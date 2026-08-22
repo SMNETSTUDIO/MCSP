@@ -755,6 +755,20 @@ body {
 .inst-del { position: absolute; top: 14px; right: 14px; opacity: 0; transition: opacity 0.2s; }
 .inst-card:hover .inst-del { opacity: 1; }
 
+/* ── 常见配置文件入口 ── */
+
+.cfgfile-row {
+  display: grid; grid-template-columns: minmax(140px, auto) 1fr auto auto;
+  align-items: center; gap: 12px;
+  padding: 8px 4px; font-size: 13px;
+}
+.cfgfile-row .cf-name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.cfgfile-row .cf-desc, .cfgfile-row .cf-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .cfgfile-row { grid-template-columns: 1fr auto; }
+  .cfgfile-row .cf-desc, .cfgfile-row .cf-meta { display: none; }
+}
+
 /* ── 磁盘占用明细 ── */
 
 .disk-row {

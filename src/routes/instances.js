@@ -485,6 +485,58 @@ router.put('/:iid/properties', (req, res) => {
   res.json({ ok: true, properties: props });
 });
 
+/* ── 常见配置文件的快捷入口 ── */
+
+/* 只列"这个服务端类型真的会用到"的文件。故意不做成表单:
+   这些 YAML 的键随服务端版本一直在变,硬编码字段迟早对不上,
+   还不如把人直接送到已有的文本编辑器前面。 */
+const KNOWN_CONFIGS = {
+  server: [
+    ['bukkit.yml', 'Bukkit 核心:生成上限、自动保存间隔'],
+    ['spigot.yml', 'Spigot:实体活动范围、合并阈值、超时'],
+    ['paper.yml', 'Paper(1.19 之前的旧版单文件配置)'],
+    ['config/paper-global.yml', 'Paper 全局配置(1.19+)'],
+    ['config/paper-world-defaults.yml', 'Paper 每世界默认值(1.19+)'],
+    ['purpur.yml', 'Purpur 专有配置'],
+    ['pufferfish.yml', 'Pufferfish 专有配置'],
+    ['commands.yml', '命令别名'],
+    ['permissions.yml', '权限组'],
+    ['eula.txt', 'Minecraft EULA 同意状态'],
+  ],
+  proxy: [
+    ['velocity.toml', 'Velocity 主配置'],
+    ['forwarding.secret', 'Velocity 转发密钥'],
+    ['config.yml', 'BungeeCord / Waterfall 主配置'],
+  ],
+};
+
+router.get('/:iid/configs', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const t = TYPES[inst.type] || TYPES.paper;
+  const out = [];
+  const add = async (rel, desc) => {
+    const p = safePath(inst, rel);
+    if (!p) return;
+    let st;
+    try { st = await fsp.stat(p); } catch { return; }      // 不存在就不列,免得点开一片空文件
+    if (!st.isFile()) return;
+    out.push({ path: '/' + rel, name: path.basename(rel), desc, size: st.size, mtime: st.mtimeMs });
+  };
+  for (const [rel, desc] of KNOWN_CONFIGS[t.category] || []) await add(rel, desc);
+
+  // Fabric/Forge 的模组配置都堆在 config/ 下,数量不定,扫一层
+  if (t.dataDir === 'mods') {
+    let entries = [];
+    try { entries = await fsp.readdir(path.join(inst.dir, 'config'), { withFileTypes: true }); } catch {}
+    for (const e of entries.slice(0, 60)) {
+      if (e.isFile() && /\.(toml|json|json5|cfg|conf|properties|yml|yaml)$/i.test(e.name)) {
+        await add(path.posix.join('config', e.name), '模组配置');
+      }
+    }
+  }
+  res.json({ ok: true, configs: out });
+}));
+
 /* ── 文件管理器:真实文件系统,路径沙箱 ── */
 
 router.get('/:iid/files', asyncHandler(async (req, res) => {
