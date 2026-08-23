@@ -337,8 +337,10 @@ function renderInstGrid() {
     const [txt, pillCls] = STATE_TEXT[i.state] || STATE_TEXT.stopped;
     return `
       <div class="card glass inst-card" data-iid="${i.id}" data-state="${i.state}">
-        <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)" aria-label="克隆实例">${ico('archive')}</button>
-        <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例" aria-label="删除实例">${ico('trash')}</button>
+        <div class="inst-actions">
+          <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)" aria-label="克隆实例 ${escapeHtml(i.name)}">${ico('archive')}</button>
+          <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例" aria-label="删除实例 ${escapeHtml(i.name)}">${ico('trash')}</button>
+        </div>
         <div class="inst-head">
           <div class="inst-ico">${i.icon}</div>
           <div>

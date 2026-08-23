@@ -840,8 +840,24 @@ body {
 .inst-stats b { color: var(--text); font-weight: 600; }
 .inst-foot { display: flex; align-items: center; gap: 8px; }
 .inst-foot .spacer { flex: 1; }
-.inst-del { position: absolute; top: 14px; right: 14px; opacity: 0; transition: opacity 0.2s; }
-.inst-card:hover .inst-del { opacity: 1; }
+/* 卡片角上的次要操作(克隆 / 删除)。克隆此前没有任何定位规则,就落在
+   普通文档流里、常驻显示在卡片左上角;删除则绝对定位在右上角。两个同级
+   操作长得毫不相干。现在收进同一组。
+
+   显示条件同时挂 hover 和 focus-within:只挂 hover 的话,键盘 Tab 过来
+   会聚焦到一个 opacity:0 的按钮上 —— 焦点环画在看不见的东西周围。 */
+.inst-actions {
+  position: absolute; top: 14px; right: 14px;
+  display: flex; gap: 6px;
+  opacity: 0; transition: opacity 0.2s;
+}
+.inst-card:hover .inst-actions,
+.inst-card:focus-within .inst-actions { opacity: 1; }
+.inst-actions .icon-btn { padding: 5px 8px; }
+/* 触屏没有 hover,不能让这两个操作永远藏着 */
+@media (hover: none) {
+  .inst-actions { opacity: 1; }
+}
 
 /* ── 常见配置文件入口 ── */
 
