@@ -25,10 +25,47 @@ const router = express.Router();
 
 /* ── 路径沙箱与文本白名单 ── */
 
+/* 实例根目录的 realpath 缓存。ROOT 本身可能落在软链下(/workspace 之类),
+   所以比对必须是 realpath 对 realpath,不能拿原始路径去比。 */
+const realDirCache = new Map();
+function instRealDir(inst) {
+  let real = realDirCache.get(inst.id);
+  if (real === undefined) {
+    try { real = fs.realpathSync(inst.dir); } catch { real = inst.dir; }
+    realDirCache.set(inst.id, real);
+  }
+  return real;
+}
+
+/**
+ * 把面板传来的相对路径解析成实例目录内的绝对路径,越界返回 null。
+ *
+ * 两道关:
+ * 1. 词法 —— path.resolve 之后必须仍在 inst.dir 底下,挡掉 `..`;
+ * 2. realpath —— 词法判断挡不住软链。实例目录里放一个 `etclink -> /etc`,
+ *    `/etclink/hostname` 能干干净净通过第一关,然后 download/content/delete
+ *    就在沙箱外操作了(实测可读出宿主机 /etc/hostname)。
+ *
+ * 目标路径可能还不存在(新建文件、上传目标、改名后的名字),所以往上找到
+ * 第一个真实存在的祖先再解 —— 只要那个祖先在沙箱内,底下还没创建的部分
+ * 自然也在沙箱内。
+ */
 function safePath(inst, rel) {
   const p = path.resolve(inst.dir, '.' + path.sep + String(rel || '/').replace(/^\/+/, ''));
   if (p !== inst.dir && !p.startsWith(inst.dir + path.sep)) return null;
-  return p;
+
+  const root = instRealDir(inst);
+  for (let probe = p; ;) {
+    try {
+      const real = fs.realpathSync(probe);
+      return (real === root || real.startsWith(root + path.sep)) ? p : null;
+    } catch (e) {
+      if (e.code !== 'ENOENT') return null;      // EACCES/ELOOP 等一律当越界处理
+      const parent = path.dirname(probe);
+      if (parent === probe) return null;          // 走到文件系统根都没找到,不可能是沙箱内
+      probe = parent;
+    }
+  }
 }
 
 const TEXT_EXT = new Set(['.txt', '.properties', '.yml', '.yaml', '.json', '.json5', '.toml', '.conf', '.cfg', '.ini', '.log', '.sh', '.md', '.mcmeta', '.snbt']);
