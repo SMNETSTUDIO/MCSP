@@ -590,13 +590,23 @@
             <span>协作者 <span class="dim small" id="collab-owner"></span></span>
             <span>
               <input id="cb-input" type="text" placeholder="面板用户名" style="width:150px" />
+              <select id="cb-role" title="权限档" style="width:96px">
+                <option value="viewer">只读</option>
+                <option value="operator">运维</option>
+                <option value="manager">管理</option>
+              </select>
               <button class="icon-btn" id="cb-add">添加</button>
             </span>
           </div>
           <div class="tag-list" id="collab-list"></div>
           <div class="dim small" style="margin-top:12px">
-            协作者能像主人一样操作这个实例,但<b>不能删除实例</b>,
-            也<b>不能改这份名单</b>。资源配额始终算在主人头上。
+            三档权限,随时可改:<br>
+            · <b>只读</b> —— 看状态、日志、玩家、备份列表。什么都改不了,适合"帮我盯着点"。<br>
+            · <b>运维</b> —— 只读 + 启停/重启/强杀、控制台命令、创建备份、踢人封禁。
+              <b>不能</b>改配置、动文件、删备份。<br>
+            · <b>管理</b> —— 除下面两条外和主人一样(这是老版本协作者的档位,升级后保持不变)。<br>
+            无论哪一档都<b>不能删除实例</b>,也<b>不能改这份名单</b> —— 那是主人和面板管理员的事。
+            资源配额始终算在主人头上。
           </div>
         </div>
         <div class="card glass" id="icon-card" style="margin-bottom:18px">

@@ -13,7 +13,7 @@ const playtime = require('../playtime');
 const modrinth = require('../modrinth');
 const rcon = require('../rcon');
 const { users: authUsers } = require('../auth');
-const { Instance, sanitizeJvmArgs } = require('../instance');
+const { Instance, sanitizeJvmArgs, COLLAB_ROLES } = require('../instance');
 const { instances, saveRegistry, installInstance, reinstallInstance, cloneInstance } = require('../registry');
 const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
@@ -115,7 +115,50 @@ router.param('iid', (req, res, next, iid) => {
     return res.status(404).json({ ok: false, error: '实例不存在' });
   }
   req.inst = inst;
+  req.perm = inst.permOf(req.user);
   next();
+});
+
+/* ── 协作者权限档的执行(功能 8)──
+ *
+ * 61 条路由逐个标注权限太容易漏,而漏掉的那条会默认放行 —— 权限代码里
+ * "忘了写"必须等于"拒绝",不能等于"允许"。所以这里反过来:
+ * GET 一律 viewer 起,其余方法**默认要 manager**(= 协作者原本的能力),
+ * 只有明确列进 OPERATOR_WRITES 的才降到 operator。
+ *
+ * 这个方向保证了两件事:
+ *   · 新加路由默认落到 manager,不会因为没标注而对 viewer 敞开;
+ *   · 老的字符串协作者被解释成 manager,升级后能做的事和以前一模一样。
+ */
+const LEVEL = { viewer: 1, operator: 2, manager: 3, owner: 4 };
+
+/* 日常运维:启停、发命令、做备份。这些不改配置也不动文件,
+   交给"能帮我看服但别乱改东西"的人正好 */
+const OPERATOR_WRITES = [
+  /^\/(start|stop|restart|kill)$/,
+  /^\/command$/,
+  /^\/backups$/,
+  /^\/players\/[^/]+\/(kick|ban|pardon|op|deop)$/,
+  /^\/rcon$/,
+];
+
+function requiredLevel(req) {
+  if (req.method === 'GET' || req.method === 'HEAD') return LEVEL.viewer;
+  // 挂在 '/:iid' 上的 use,Express 已经把 /api/instances/<iid> 剥掉了,
+  // req.path 就是实例内的子路径('/start'、'/'…)。别再自己剥一次
+  const sub = req.path || '/';
+  return OPERATOR_WRITES.some((re) => re.test(sub)) ? LEVEL.operator : LEVEL.manager;
+}
+
+router.use('/:iid', (req, res, next) => {
+  const have = LEVEL[req.perm] || 0;
+  const need = requiredLevel(req);
+  if (have >= need) return next();
+  const label = { 1: '只读', 2: '运维', 3: '管理' }[need] || '管理';
+  return res.status(403).json({
+    ok: false, code: 'insufficient_perm',
+    error: `权限不足:该操作需要「${label}」及以上,你在这个实例上是「${{ viewer: '只读', operator: '运维', manager: '管理' }[req.perm] || req.perm}」`,
+  });
 });
 
 /** 当前用户可见的实例:管理员全量,普通用户仅自己名下 */
@@ -418,17 +461,25 @@ router.put('/:iid/collaborators', asyncHandler(async (req, res) => {
   if (!list) return res.status(400).json({ ok: false, error: '缺少 users 数组' });
   if (list.length > 20) return res.status(400).json({ ok: false, error: '协作者最多 20 人' });
 
-  const names = [...new Set(list.map((x) => String(x).trim()).filter(Boolean))];
-  for (const n of names) {
-    if (!authUsers.some((u) => u.username === n)) return res.status(400).json({ ok: false, error: `用户不存在: ${n}` });
-    if (n === inst.owner) return res.status(400).json({ ok: false, error: '主人本来就有权限,不用加成协作者' });
+  /* users 里可以是 'alice'(沿用旧写法,按 manager 处理)
+     或 {name:'alice', role:'viewer'}。两种混着传也认。 */
+  const seen = new Set();
+  const entries = [];
+  for (const raw of list) {
+    const name = String((raw && raw.name) || raw || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const role = COLLAB_ROLES.includes(raw && raw.role) ? raw.role : 'manager';
+    if (!authUsers.some((u) => u.username === name)) return res.status(400).json({ ok: false, error: `用户不存在: ${name}` });
+    if (name === inst.owner) return res.status(400).json({ ok: false, error: '主人本来就有权限,不用加成协作者' });
+    entries.push({ name, role });
   }
-  inst.collaborators = names;
+  inst.collaborators = entries;
   saveRegistry();
-  inst.log('INFO', `[MCSP] 协作者已更新: ${names.length ? names.join(', ') : '(已清空)'}`);
+  inst.log('INFO', `[MCSP] 协作者已更新: ${entries.length ? entries.map((e) => `${e.name}(${e.role})`).join(', ') : '(已清空)'}`);
   inst.emitState();
   bus.broadcast('instances', {});
-  res.json({ ok: true, collaborators: names });
+  res.json({ ok: true, collaborators: entries });
 }));
 
 /* 重装 / 升级:换服务端 jar,保留世界与全部配置。默认先自动备份一份。 */

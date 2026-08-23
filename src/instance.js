@@ -36,6 +36,9 @@ function crashCfg() {
   };
 }
 
+/* 协作者权限档,从低到高。owner 不在其中 —— 那是身份不是可授予的档位 */
+const COLLAB_ROLES = ['viewer', 'operator', 'manager'];
+
 /* TPS 采样间隔。每次是一个完整的 RCON 短连接,不宜跟着 2 秒的指标循环走 */
 const TPS_SAMPLE_MS = 10_000;
 
@@ -142,9 +145,18 @@ class Instance {
     this.name = meta.name;
     this.icon = meta.icon || '🌳';
     this.owner = meta.owner || 'admin';                   // 归属用户;旧实例默认归管理员
-    // 协作者:能操作这个实例,但不能删实例、也不能改协作者名单。
-    // 配额始终算在 owner 头上 —— 否则拉个小号当协作者就能绕开自己的配额
-    this.collaborators = Array.isArray(meta.collaborators) ? meta.collaborators.filter((x) => typeof x === 'string') : [];
+    /* 协作者:能操作这个实例,但不能删实例、也不能改协作者名单。
+       配额始终算在 owner 头上 —— 否则拉个小号当协作者就能绕开自己的配额。
+       两种形态都收:老的 'alice' 和带权限档的 {name:'alice', role:'viewer'}。
+       这里必须认对象形态 —— 只留字符串的话,带档位的协作者会在下一次
+       面板重启时被静默清空,而且是"设置成功了、重启后人没了"这种最难查的丢法。 */
+    this.collaborators = Array.isArray(meta.collaborators)
+      ? meta.collaborators
+        .map((x) => (typeof x === 'string'
+          ? x
+          : (x && typeof x.name === 'string' ? { name: x.name, role: x.role } : null)))
+        .filter(Boolean)
+      : [];
     this.type = TYPES[meta.type] ? meta.type : 'paper';   // 旧实例无 type,默认 paper
     this.version = meta.version;
     this.jar = meta.jar;
@@ -206,7 +218,7 @@ class Instance {
       icon: this.icon,
       type: this.type,
       owner: this.owner,
-      collaborators: this.collaborators,
+      collaborators: this.collaboratorList(),   // 统一成 [{name,role}],前端不用再判两种形态
       state: this.state,
       installProgress: this.installProgress,
       version: this.version,
@@ -232,8 +244,39 @@ class Instance {
 
   /** 谁能操作这个实例:管理员、主人、协作者 */
   canAccess(user) {
-    if (!user) return false;
-    return user.role === 'admin' || user.username === this.owner || this.collaborators.includes(user.username);
+    return !!this.permOf(user);
+  }
+
+  /**
+   * 这个用户对本实例的权限档(功能 8)。
+   *   owner    实例主人 / 面板管理员 —— 包括删实例、改协作者名单
+   *   manager  除"所有权级"操作外都能做(协作者的历史行为)
+   *   operator 启停、发命令、做备份;不能改配置、动文件、删备份
+   *   viewer   只读:状态、日志、玩家、列表
+   *   null     无权访问
+   *
+   * collaborators 兼容两种写法:老的 ['alice'] 和新的 [{name:'alice',role:'viewer'}]。
+   * 纯字符串一律按 manager 解释 —— 升级不能悄悄改变已有协作者能做什么,
+   * 那种"某天开始朋友突然动不了文件了"的变化比缺功能更难排查。
+   */
+  permOf(user) {
+    if (!user) return null;
+    if (user.role === 'admin' || user.username === this.owner) return 'owner';
+    for (const c of this.collaborators || []) {
+      if (typeof c === 'string') {
+        if (c === user.username) return 'manager';
+      } else if (c && c.name === user.username) {
+        return COLLAB_ROLES.includes(c.role) ? c.role : 'manager';
+      }
+    }
+    return null;
+  }
+
+  /** 协作者名单的展示形态:统一成 [{name, role}] */
+  collaboratorList() {
+    return (this.collaborators || []).map((c) => (typeof c === 'string'
+      ? { name: c, role: 'manager' }
+      : { name: c.name, role: COLLAB_ROLES.includes(c.role) ? c.role : 'manager' }));
   }
 
   /* ── logging ── */
@@ -1095,4 +1138,4 @@ class Instance {
   }
 }
 
-module.exports = { Instance, panel, sanitizeJvmArgs, listeningPorts };
+module.exports = { Instance, panel, sanitizeJvmArgs, listeningPorts, COLLAB_ROLES };

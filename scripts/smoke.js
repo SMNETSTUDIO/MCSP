@@ -74,6 +74,68 @@ async function incrementalBackupSuite(iid) {
   await req('DELETE', `/api/instances/${iid}/backups/${incId}`);
 }
 
+/**
+ * 协作者权限档(功能 8)。
+ *
+ * 权限代码最危险的失败方式是"悄悄放行"—— 所以这里逐档打真实端点看状态码,
+ * 而不是只验接口回了什么。特别是 viewer:它必须连一个写操作都做不了。
+ */
+async function collabRoleSuite(iid) {
+  const adminCookie = cookie;
+  const tag = Date.now().toString(36).slice(-4);
+  const users = { viewer: `sv_${tag}`, operator: `so_${tag}`, manager: `sm_${tag}` };
+  const pass = 'smokepass123';
+  let r;
+
+  for (const u of Object.values(users)) {
+    await req('POST', '/api/users', { username: u, password: pass, role: 'user' });
+  }
+  // 记下原有名单,跑完原样放回去 —— 别把别人的协作者配置洗掉
+  r = await req('GET', `/api/instances/${iid}/status`);
+  const original = (r.json && r.json.collaborators) || [];
+
+  r = await req('PUT', `/api/instances/${iid}/collaborators`, {
+    users: Object.entries(users).map(([role, name]) => ({ name, role })),
+  });
+  check('collab roles: 设置三档', r.json && r.json.ok
+    && r.json.collaborators.length === 3
+    && r.json.collaborators.every((c) => c.name && c.role), JSON.stringify(r.json));
+
+  /** 以某个用户身份打一个端点,返回状态码。GET 不能带 body,fetch 会直接抛 */
+  const as = async (user, method, sub, body) => {
+    cookie = '';
+    await req('POST', '/api/auth/login', { username: user, password: pass });
+    const isRead = method === 'GET' || method === 'HEAD';
+    const res = await req(method, `/api/instances/${iid}${sub}`, isRead ? undefined : (body || {}));
+    return res.status;
+  };
+
+  // viewer:读得到,写不了(挑三个不同性质的写操作)
+  check('collab viewer: 可读状态', (await as(users.viewer, 'GET', '/status')) === 200);
+  check('collab viewer: 禁止发命令', (await as(users.viewer, 'POST', '/command', { command: 'list' })) === 403);
+  check('collab viewer: 禁止建备份', (await as(users.viewer, 'POST', '/backups')) === 403);
+  check('collab viewer: 禁止改配置', (await as(users.viewer, 'PATCH', '', { name: 'x' })) === 403);
+
+  // operator:能做日常运维,但改不了配置
+  check('collab operator: 可建备份', (await as(users.operator, 'POST', '/backups')) === 200);
+  check('collab operator: 禁止改配置', (await as(users.operator, 'PATCH', '', { name: 'x' })) === 403);
+
+  // manager:配置也能改,但仍然碰不到所有权级操作
+  check('collab manager: 可改配置', (await as(users.manager, 'PATCH', '', {})) === 200);
+  check('collab manager: 禁止改协作者名单',
+    (await as(users.manager, 'PUT', '/collaborators', { users: [] })) === 403);
+  check('collab manager: 禁止删实例', (await as(users.manager, 'DELETE', '')) === 403);
+
+  // 收尾:恢复原名单并删掉测试账号
+  cookie = adminCookie;
+  await req('PUT', `/api/instances/${iid}/collaborators`, { users: original });
+  for (const u of Object.values(users)) await req('DELETE', `/api/users/${u}`);
+  r = await req('GET', `/api/instances/${iid}/status`);
+  check('collab roles: 名单已还原',
+    JSON.stringify((r.json && r.json.collaborators) || []) === JSON.stringify(original),
+    JSON.stringify(r.json && r.json.collaborators));
+}
+
 /** 当前时间片的 TOTP 码;没配密钥就返回 undefined(登录接口会忽略它) */
 function totpNow() {
   if (!TOTP_SECRET) return undefined;
@@ -450,6 +512,7 @@ async function uniqueNameRoundtrip() {
   check('404 instance', r.status === 404);
 
   if (inst) await incrementalBackupSuite(inst.id);
+  if (inst && isAdmin) await collabRoleSuite(inst.id);
 
   /* ── 多租户与新功能的集成用例(功能 15)──
      这一段专门覆盖"跨用户"和"权限边界",单用户的 happy path 测不到这些。

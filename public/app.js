@@ -1616,11 +1616,26 @@ function renderCollab(status) {
   $('#collab-card').hidden = !mine;          // 协作者自己看不到也改不了这张卡
   if (!mine) return;
   $('#collab-owner').textContent = `主人:${status.owner}`;
-  const list = status.collaborators || [];
+  const list = normCollab(status.collaborators);
   $('#collab-list').innerHTML = list.length
-    ? list.map((n) => `<span class="tag">${escapeHtml(n)}<button data-cbdel="${escapeHtml(n)}" title="移除">×</button></span>`).join('')
+    ? list.map((c) => `
+      <span class="tag">
+        ${escapeHtml(c.name)}
+        <select data-cbrole="${escapeHtml(c.name)}" title="权限档"
+                style="margin:0 4px;padding:1px 4px;font-size:11px">
+          ${COLLAB_ROLES.map(([v, label]) =>
+            `<option value="${v}"${c.role === v ? ' selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <button data-cbdel="${escapeHtml(c.name)}" title="移除">×</button>
+      </span>`).join('')
     : '<div class="empty">还没有协作者。加一个面板用户,他就能和你一起管这个实例。</div>';
 }
+
+const COLLAB_ROLES = [['viewer', '只读'], ['operator', '运维'], ['manager', '管理']];
+
+/** 后端已统一返回 [{name,role}],但缓存里可能还留着老的字符串数组 */
+const normCollab = (list) => (list || []).map((c) => (typeof c === 'string'
+  ? { name: c, role: 'manager' } : c));
 
 async function saveCollab(users) {
   const r = await iapi('/collaborators', { method: 'PUT', body: { users } });
@@ -1634,16 +1649,23 @@ async function saveCollab(users) {
 $('#cb-add').addEventListener('click', () => {
   const n = $('#cb-input').value.trim();
   if (!n) return;
-  const cur = (instMap.get(currentIid) || {}).collaborators || [];
-  if (cur.includes(n)) return toast('已经在名单里了', true);
+  const cur = normCollab((instMap.get(currentIid) || {}).collaborators);
+  if (cur.some((c) => c.name === n)) return toast('已经在名单里了', true);
   $('#cb-input').value = '';
-  saveCollab([...cur, n]);
+  // 默认给最低档:加人的时候顺手给到最大权限,是这类功能最常见的事故来源
+  saveCollab([...cur, { name: n, role: $('#cb-role').value || 'viewer' }]);
 });
 $('#collab-list').addEventListener('click', (e) => {
   const b = e.target.closest('[data-cbdel]');
   if (!b) return;
-  const cur = (instMap.get(currentIid) || {}).collaborators || [];
-  saveCollab(cur.filter((x) => x !== b.dataset.cbdel));
+  const cur = normCollab((instMap.get(currentIid) || {}).collaborators);
+  saveCollab(cur.filter((c) => c.name !== b.dataset.cbdel));
+});
+$('#collab-list').addEventListener('change', (e) => {
+  const s = e.target.closest('[data-cbrole]');
+  if (!s) return;
+  const cur = normCollab((instMap.get(currentIid) || {}).collaborators);
+  saveCollab(cur.map((c) => (c.name === s.dataset.cbrole ? { ...c, role: s.value } : c)));
 });
 
 /* ── 服务器图标 ── */
