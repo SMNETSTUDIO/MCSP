@@ -2019,6 +2019,25 @@ function applyTunnelStatus(t) {
   const err = $('#tn-error');
   err.hidden = !t.error || t.state === 'running';
   if (t.error) err.textContent = '上次启动失败:' + t.error;
+  if (t.rcon) applyRconTunnelStatus(t.rcon);
+}
+
+/* RCON 隧道:状态徽章用 on/off 而不是 pill —— 运行中要显眼,
+   因为"还开着"本身就是需要留意的状态 */
+function applyRconTunnelStatus(r) {
+  const badge = $('#tnr-state');
+  if (!badge) return;
+  const running = r.state === 'running';
+  badge.textContent = running ? '公网可访问' : (r.state === 'starting' ? '连接中…' : '未启动');
+  badge.className = `task-badge ${running ? 'on' : 'off'}`;
+  $('#tnr-addr').hidden = !r.addr;
+  $('#tnr-copy').hidden = !r.addr;
+  if (r.addr) $('#tnr-addr').textContent = r.addr;
+  $('#tnr-start').disabled = r.state !== 'stopped';
+  $('#tnr-stop').disabled = r.state === 'stopped';
+  const e = $('#tnr-error');
+  e.hidden = !r.error || running;
+  if (r.error) e.textContent = '上次启动失败:' + r.error;
 }
 
 async function loadTunnel() {
@@ -2038,8 +2057,12 @@ async function loadTunnel() {
   $('#tn-bore-rport').value = (c.bore && c.bore.remotePort) || '';
   $('#tn-pinggy-token').value = (c.pinggy && c.pinggy.token) || '';
   $('#tn-serveo-rport').value = (c.serveo && c.serveo.remotePort) || '';
+  $('#tnr-port').value = (c.rcon && c.rcon.remotePort) || '';
   toggleTunnelForm();
-  applyTunnelStatus({ state: cfg.state, addr: cfg.addr, error: cfg.error, claim: cfg.claim });
+  applyTunnelStatus({
+    state: cfg.state, addr: cfg.addr, error: cfg.error, claim: cfg.claim,
+    rcon: cfg.rcon || { state: 'stopped' },
+  });
 }
 
 function toggleTunnelForm() {
@@ -2070,30 +2093,61 @@ $('#tunnel-components').addEventListener('click', async (e) => {
   else { toast(r.error, true); loadTunnel(); }
 });
 
-$('#tn-save').addEventListener('click', async () => {
-  const r = await iapi('/tunnel', {
-    method: 'PUT',
-    body: {
-      type: $('#tn-type').value,
-      ngrok: { authtoken: $('#tn-ngrok-token').value.trim() },
-      frpc: {
-        serverAddr: $('#tn-frpc-addr').value.trim(),
-        serverPort: $('#tn-frpc-port').value,
-        token: $('#tn-frpc-token').value.trim(),
-        user: $('#tn-frpc-user').value.trim(),
-        metaToken: $('#tn-frpc-meta').value.trim(),
-        remotePort: $('#tn-frpc-rport').value,
-      },
-      bore: {
-        server: $('#tn-bore-server').value.trim() || 'bore.pub',
-        secret: $('#tn-bore-secret').value.trim(),
-        remotePort: $('#tn-bore-rport').value,
-      },
-      pinggy: { token: $('#tn-pinggy-token').value.trim() },
-      serveo: { remotePort: $('#tn-serveo-rport').value },
+/** 穿透表单的完整载荷。PUT 是整体覆盖,所以每次都要带齐所有字段 ——
+    RCON 隧道启动前也要先存一次,不能只提交它自己那一小段 */
+function tunnelBody() {
+  return {
+    type: $('#tn-type').value,
+    ngrok: { authtoken: $('#tn-ngrok-token').value.trim() },
+    frpc: {
+      serverAddr: $('#tn-frpc-addr').value.trim(),
+      serverPort: $('#tn-frpc-port').value,
+      token: $('#tn-frpc-token').value.trim(),
+      user: $('#tn-frpc-user').value.trim(),
+      metaToken: $('#tn-frpc-meta').value.trim(),
+      remotePort: $('#tn-frpc-rport').value,
     },
-  });
+    bore: {
+      server: $('#tn-bore-server').value.trim() || 'bore.pub',
+      secret: $('#tn-bore-secret').value.trim(),
+      remotePort: $('#tn-bore-rport').value,
+    },
+    pinggy: { token: $('#tn-pinggy-token').value.trim() },
+    serveo: { remotePort: $('#tn-serveo-rport').value },
+    rcon: { remotePort: $('#tnr-port').value },
+  };
+}
+
+$('#tn-save').addEventListener('click', async () => {
+  const r = await iapi('/tunnel', { method: 'PUT', body: tunnelBody() });
   r.ok ? toast('穿透配置已保存') : toast(r.error, true);
+});
+
+/* RCON 隧道。开之前挡一道确认 —— 这不是"再点一次"的仪式,
+   而是因为一旦开了,公网上任何人都能对着一个明文协议敲密码 */
+$('#tnr-start').addEventListener('click', async () => {
+  if (!confirm('即将把 RCON 端口暴露到公网。\n\n'
+    + 'RCON 是明文协议:密码和命令都不加密,链路上任何人都能读到;\n'
+    + '拿到 RCON 等于拿到服务器控制台(op、stop、ban…)。\n\n'
+    + '用完请及时停止。确定继续吗?')) return;
+  /* 只把远端端口随请求带过去,不在这里 PUT 整个穿透配置。
+     踩过一次:表单只要有一处没同步(刚切进本页、或别处改过),
+     那次"顺手保存"就会拿旧表单把已保存的配置整体覆盖掉 ——
+     实测把 type=bore 写成了 none,隧道再也起不来。 */
+  const r = await iapi('/tunnel/rcon/start', {
+    method: 'POST', body: { remotePort: $('#tnr-port').value },
+  });
+  r.ok ? toast('RCON 隧道启动中…') : toast(r.error, true);
+});
+
+$('#tnr-stop').addEventListener('click', async () => {
+  const r = await iapi('/tunnel/rcon/stop', { method: 'POST' });
+  r.ok ? toast('RCON 隧道已停止') : toast(r.error, true);
+});
+
+$('#tnr-copy').addEventListener('click', async () => {
+  await copyText($('#tnr-addr').textContent);
+  toast('RCON 地址已复制');
 });
 
 $('#tn-start').addEventListener('click', async () => {

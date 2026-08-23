@@ -112,6 +112,10 @@ const DEFAULT_TUNNEL = () => ({
   bore: { server: 'bore.pub', secret: '', remotePort: 0 },
   pinggy: { token: '' },
   serveo: { remotePort: 0 },
+  /* RCON 端口独立隧道的远端端口偏好(0 = 自动)。和主隧道一样要显式启动,
+     不存"开关"状态 —— RCON 是明文协议,把它挂到公网等于把服务器控制台挂到
+     公网,不该有任何形式的自动开启。安全约束见 instance.js 的 startRconTunnel() */
+  rcon: { remotePort: 0 },
 });
 
 module.exports = { componentBin, componentInfo, installComponent, ensureSshKey, sshKeyPath, DEFAULT_TUNNEL };

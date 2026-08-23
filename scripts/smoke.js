@@ -148,6 +148,63 @@ async function collabRoleSuite(iid) {
     !left.some((c) => Object.values(users).includes(c.name)), JSON.stringify(left));
 }
 
+/**
+ * RCON 端口穿透的安全闸门。
+ *
+ * 这个功能把服务器控制台挂到公网,而 RCON 是明文协议、几乎没有防爆破 ——
+ * 所以真正要守的不是"能不能开",是"该拒绝的时候有没有拒绝"。
+ * 用例全部走真实端点、只看会不会被放行,不依赖任何外部中继。
+ * 跑完把穿透配置还原,不留痕。
+ */
+async function rconTunnelSuite(iid) {
+  const before = (await req('GET', `/api/instances/${iid}/tunnel`)).json;
+  const origType = before.config.type;
+  const start = () => req('POST', `/api/instances/${iid}/tunnel/rcon/start`, {});
+  let r;
+
+  // 面板上可能已经开着一条(手动开的、或上次跑到一半中断)。
+  // 不先收掉的话后面每个 start 都只会回"已在运行",测的就不是校验逻辑了
+  await req('POST', `/api/instances/${iid}/tunnel/rcon/stop`);
+
+  await req('PUT', `/api/instances/${iid}/tunnel`, { type: 'none' });
+  r = await start();
+  check('rcon tunnel: 未选穿透方式时拒绝',
+    r.json.ok === false && /穿透方式/.test(r.json.error || ''), JSON.stringify(r.json));
+
+  await req('PUT', `/api/instances/${iid}/tunnel`, { type: 'playit' });
+  r = await start();
+  check('rcon tunnel: playit 明确不支持',
+    r.json.ok === false && /playit/.test(r.json.error || ''), JSON.stringify(r.json));
+
+  /* 下面几条依赖 server.properties 的 RCON 设置。实例可能压根没这个文件,
+     那时后端会认为"RCON 未开启"—— 一样是拒绝,断言写宽一点即可。 */
+  await req('PUT', `/api/instances/${iid}/tunnel`, { type: 'bore', bore: { server: 'bore.pub' } });
+  const props = (await req('GET', `/api/instances/${iid}/rcon`)).json;
+  r = await start();
+  if (!props.enabled) {
+    check('rcon tunnel: RCON 未开启时拒绝',
+      r.json.ok === false && /RCON/.test(r.json.error || ''), JSON.stringify(r.json));
+  } else if (!props.password || props.password.length < 12) {
+    check('rcon tunnel: 弱密码时拒绝',
+      r.json.ok === false && /密码/.test(r.json.error || ''), JSON.stringify(r.json));
+  } else {
+    // 密码够强:此时唯一该挡住它的就是"组件没装",不该是权限或校验问题
+    check('rcon tunnel: 强密码时通过校验(仅可能卡在组件未安装)',
+      r.json.ok === true || /尚未安装/.test(r.json.error || ''), JSON.stringify(r.json));
+    if (r.json.ok) await req('POST', `/api/instances/${iid}/tunnel/rcon/stop`);
+  }
+
+  // 启动请求带的 remotePort 应被持久化,且不该动到穿透类型
+  await req('POST', `/api/instances/${iid}/tunnel/rcon/start`, { remotePort: 45678 });
+  const after = (await req('GET', `/api/instances/${iid}/tunnel`)).json;
+  check('rcon tunnel: 启动请求里的端口被记住', after.config.rcon.remotePort === 45678,
+    JSON.stringify(after.config.rcon));
+  check('rcon tunnel: 启动不会改写穿透类型', after.config.type === 'bore', after.config.type);
+
+  await req('POST', `/api/instances/${iid}/tunnel/rcon/stop`);
+  await req('PUT', `/api/instances/${iid}/tunnel`, { ...before.config, type: origType });
+}
+
 /** 当前时间片的 TOTP 码;没配密钥就返回 undefined(登录接口会忽略它) */
 function totpNow() {
   if (!TOTP_SECRET) return undefined;
@@ -562,6 +619,7 @@ async function uniqueNameRoundtrip() {
   check('404 instance', r.status === 404);
 
   if (inst) await incrementalBackupSuite(inst.id);
+  if (inst) await rconTunnelSuite(inst.id);
   if (inst && isAdmin) await collabRoleSuite(inst.id);
 
   /* ── 多租户与新功能的集成用例(功能 15)──

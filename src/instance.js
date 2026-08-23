@@ -39,6 +39,44 @@ function crashCfg() {
 /* 协作者权限档,从低到高。owner 不在其中 —— 那是身份不是可授予的档位 */
 const COLLAB_ROLES = ['viewer', 'operator', 'manager'];
 
+/* 允许把 RCON 暴露到公网的最短密码长度。面板生成的是 16 位随机串;
+   低于这个长度直接拒绝开隧道 —— 明文协议 + 无防爆破,短密码等于没密码 */
+const RCON_MIN_PASSWORD = 12;
+
+/**
+ * 从隧道进程的一行输出里提取公网地址,提不到返回 null。
+ *
+ * 抽成纯函数是为了给 RCON 隧道复用:两条隧道跑的是同样的中继、
+ * 输出格式当然也一样,没有理由把这些正则抄第二遍 ——
+ * 抄了之后改一处忘一处,是这种代码最典型的腐烂方式。
+ * 主隧道保留它自己那套(还要处理 claim 链接、UDP 警告等),这里只管地址。
+ */
+function parseTunnelAddr(type, line, ctx = {}) {
+  if (type === 'bore') {
+    const m = line.match(/listening at [\w.-]+:(\d+)/i);
+    return m ? `${ctx.boreServer || 'bore.pub'}:${m[1]}` : null;
+  }
+  if (type === 'pinggy') {
+    const m = line.match(/tcp:\/\/([\w.-]+:\d+)/i);
+    return m ? m[1] : null;
+  }
+  if (type === 'serveo') {
+    // Serveo 成功时回 "Forwarding TCP connections from serveo.net:PORT"
+    const m = line.match(/from\s+([\w.-]+:\d+)/i);
+    if (m) return m[1];
+    return /forwarding/i.test(line) && ctx.serveoPort ? `serveo.net:${ctx.serveoPort}` : null;
+  }
+  if (type === 'ngrok') {
+    const m = line.match(/tcp:\/\/([\w.-]+:\d+)/);
+    return m ? m[1] : null;
+  }
+  if (type === 'frpc') {
+    // frpc 的成功标志是 "start proxy success";地址由配置算得,不在输出里
+    return /start\s+proxy\s+success|proxy\s+added/i.test(line) ? (ctx.frpcPublic || null) : null;
+  }
+  return null;
+}
+
 /* TPS 采样间隔。每次是一个完整的 RCON 短连接,不宜跟着 2 秒的指标循环走 */
 const TPS_SAMPLE_MS = 10_000;
 
@@ -195,11 +233,20 @@ class Instance {
     this.crashes = readJson(path.join(DATA_DIR, 'crashes', `${this.id}.json`), []);
 
     this.tunnel = { ...DEFAULT_TUNNEL(), ...(meta.tunnel || {}) };
+    // 这次改动之前存下来的实例没有 rcon 段。浅合并只补顶层键,
+    // 万一存的是 rcon:null 就会漏过去,下面读 .remotePort 直接抛
+    this.tunnel.rcon = { remotePort: 0, ...(this.tunnel.rcon || {}) };
     this.tunnelProc = null;
     this.tunnelState = 'stopped'; // stopped | starting | running
     this.tunnelAddr = null;
     this.tunnelError = null;      // last failure reason, for the tunnel view
     this.tunnelClaim = null;      // playit 首次绑定链接
+
+    // RCON 端口的独立隧道(和主隧道互不影响,可以只开其中一个)
+    this.rconTunnelProc = null;
+    this.rconTunnelState = 'stopped';
+    this.rconTunnelAddr = null;
+    this.rconTunnelError = null;
 
     this.tps = null;              // 最近一次 RCON 采到的 TPS;没开 RCON 就一直是 null
     this.mspt = null;             // 平均 tick 耗时(仅 Paper 系提供)
@@ -238,7 +285,13 @@ class Instance {
       mspt: this.mspt,
       motd: this.getProp('motd') || '',
       pid: this.proc ? this.proc.pid : null,
-      tunnel: { type: this.tunnel.type, state: this.tunnelState, addr: this.tunnelAddr, error: this.tunnelError, claim: this.tunnelClaim },
+      tunnel: {
+        type: this.tunnel.type, state: this.tunnelState, addr: this.tunnelAddr,
+        error: this.tunnelError, claim: this.tunnelClaim,
+        // 只报运行态。原来还带了个 config.enabled,但它不 gate 任何东西
+        // (启动是显式的,和主隧道一样),结果就是隧道跑着而 enabled 显示 false
+        rcon: { state: this.rconTunnelState, addr: this.rconTunnelAddr, error: this.rconTunnelError },
+      },
     };
   }
 
@@ -1043,6 +1096,167 @@ class Instance {
     this._tunnelStopping = true;
     try { this.tunnelProc.kill('SIGTERM'); } catch {}
     return { ok: true };
+  }
+
+  /* ── RCON 端口的独立隧道 ──────────────────────────────────────────────
+   *
+   * 用途:没有公网 IP 时,用外部 RCON 客户端(mcrcon / RconCLI / 手机 App)
+   * 管服务器,不必开着面板。
+   *
+   * 但这件事本身是危险的,所以下面几条不是"提示",是硬性拦截:
+   *
+   *   1. RCON 协议**全程明文**。密码以明文躺在认证包里,命令和回显也没有加密。
+   *      任何能看到这条链路的人(公共中继的运营方、同网段、中间设备)都能
+   *      直接拿到密码。这一点无法通过配置解决 —— 协议就是这样设计的。
+   *   2. 拿到 RCON = 拿到服务器控制台:op 自己、stop、ban、装了插件的话
+   *      基本等于任意命令执行。它比游戏端口危险一个量级。
+   *   3. 原版 RCON 几乎没有防爆破。挂在公网上会被扫描器持续敲门。
+   *
+   * 因此:必须已开启 RCON、必须有**足够长的密码**(短密码直接拒绝启动),
+   * 并且每次启动都在控制台留一条明确的告警。playit 不支持 —— 它的端口映射
+   * 在 playit.gg 控制台配置,面板无法替它申请第二个端口。
+   *
+   * 真要长期远程管理,自建 frps(frpc 模式)比公共中继可控得多:
+   * 链路只经过你自己的服务器。
+   */
+  startRconTunnel() {
+    if (this.rconTunnelProc) return { ok: false, error: 'RCON 穿透已在运行' };
+    const type = this.tunnel.type;
+    if (type === 'playit') {
+      return { ok: false, error: 'playit 的端口映射在其控制台配置,面板无法为 RCON 申请第二个端口;请改用 frpc / bore / ngrok / pinggy / serveo' };
+    }
+    if (!['ngrok', 'frpc', 'bore', 'pinggy', 'serveo'].includes(type)) {
+      return { ok: false, error: '请先在上方选择并保存一种穿透方式' };
+    }
+
+    const props = this.readProps();
+    if (String(props['enable-rcon']).toLowerCase() !== 'true') {
+      return { ok: false, error: '请先在「设置 → RCON」里开启 RCON' };
+    }
+    const pass = String(props['rcon.password'] || '');
+    if (!pass) return { ok: false, error: 'RCON 没有设置密码,拒绝暴露到公网' };
+    if (pass.length < RCON_MIN_PASSWORD) {
+      return { ok: false, error: `RCON 密码只有 ${pass.length} 位,太短了。协议是明文的、又没有防爆破,`
+        + `暴露到公网前请改成至少 ${RCON_MIN_PASSWORD} 位(设置页「重新生成配置」会生成一个 16 位随机密码)` };
+    }
+    const rconPort = parseInt(props['rcon.port'], 10) || 25575;
+
+    const bin = ['pinggy', 'serveo'].includes(type) ? 'ssh' : componentBin(type);
+    if (!['pinggy', 'serveo'].includes(type) && !fs.existsSync(bin)) {
+      return { ok: false, error: `${type} 尚未安装,请先在本页安装组件` };
+    }
+
+    let proc;
+    const want = parseInt(this.tunnel.rcon.remotePort, 10) || 0;
+    if (type === 'bore') {
+      const server = String(this.tunnel.bore.server || 'bore.pub').trim() || 'bore.pub';
+      this._rconBoreServer = server;
+      const args = ['local', String(rconPort), '--to', server];
+      if (want > 0) args.push('--port', String(want));
+      proc = spawn(bin, args, { env: { ...process.env, ...(this.tunnel.bore.secret ? { BORE_SECRET: String(this.tunnel.bore.secret) } : {}) } });
+    } else if (type === 'ngrok') {
+      const token = String(this.tunnel.ngrok.authtoken || '').trim();
+      if (!token) return { ok: false, error: '请先填写 ngrok Authtoken' };
+      proc = spawn(bin, ['tcp', String(rconPort), '--log', 'stdout', '--log-format', 'json'], {
+        env: { ...process.env, NGROK_AUTHTOKEN: token },
+      });
+    } else if (type === 'pinggy') {
+      const token = String(this.tunnel.pinggy.token || '').trim();
+      proc = spawn('ssh', [...this._sshOpts('443'), '-R', `0:127.0.0.1:${rconPort}`, `${token ? token + '+' : ''}tcp@a.pinggy.io`]);
+    } else if (type === 'serveo') {
+      const remotePort = want || (30000 + Math.floor(Math.random() * 30000));
+      this._rconServeoPort = remotePort;
+      proc = spawn('ssh', [...this._sshOpts('22'), '-R', `${remotePort}:127.0.0.1:${rconPort}`, 'serveo.net']);
+    } else {
+      // frpc:单独一个进程 + 单独的配置,和主隧道互不影响
+      // (主隧道可以关着只开 RCON,反之亦然)。proxy 名字带 -rcon 后缀避免撞名
+      const f = this.tunnel.frpc;
+      if (!f.serverAddr) return { ok: false, error: '请先填写 frps 服务器地址' };
+      const remotePort = want || rconPort;
+      const lines = [
+        `serverAddr = "${f.serverAddr}"`,
+        `serverPort = ${parseInt(f.serverPort, 10) || 7000}`,
+      ];
+      if (f.user) lines.push(`user = "${f.user}"`);
+      if (f.token) lines.push('auth.method = "token"', `auth.token = "${f.token}"`);
+      if (f.metaToken) lines.push(`metadatas.token = "${f.metaToken}"`);
+      lines.push('', '[[proxies]]', `name = "mcsp-${this.id}-rcon"`, 'type = "tcp"',
+        'localIP = "127.0.0.1"', `localPort = ${rconPort}`, `remotePort = ${remotePort}`);
+      const cfgPath = path.join(DATA_DIR, `frpc-rcon-${this.id}.toml`);
+      fs.writeFileSync(cfgPath, lines.join('\n') + '\n');
+      this._rconFrpcPublic = `${f.serverAddr}:${remotePort}`;
+      proc = spawn(bin, ['-c', cfgPath]);
+    }
+
+    this.rconTunnelProc = proc;
+    this.rconTunnelState = 'starting';
+    this.rconTunnelAddr = null;
+    this.rconTunnelError = null;
+    this.emitState();
+    this.log('WARN', `[${type}/rcon] ⚠ 正在把 RCON 端口 ${rconPort} 暴露到公网。`
+      + 'RCON 是明文协议,密码与命令都不加密,拿到它等于拿到服务器控制台 —— '
+      + '用完请及时停止,长期使用建议自建 frps 而不是公共中继');
+
+    let buf = '';
+    const onData = (chunk) => {
+      buf += chunk.toString('utf8');
+      let i;
+      while ((i = buf.search(/[\r\n]/)) >= 0) {
+        const line = stripAnsi(buf.slice(0, i)).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        const addr = parseTunnelAddr(type, line, {
+          boreServer: this._rconBoreServer,
+          serveoPort: this._rconServeoPort,
+          frpcPublic: this._rconFrpcPublic,
+        });
+        if (addr && this.rconTunnelAddr !== addr) {
+          this.rconTunnelAddr = addr;
+          this.rconTunnelState = 'running';
+          this.log('WARN', `[${type}/rcon] ✔ RCON 已可从公网访问: ${addr}(用完记得停止)`);
+          this.emitState();
+        } else if (!this.rconTunnelAddr && /error|denied|refused|failed|timed out/i.test(line)) {
+          this.rconTunnelError = line.slice(0, 200);
+          this.log('WARN', `[${type}/rcon] ${line.slice(0, 200)}`);
+        }
+      }
+      if (buf.length > 8192) buf = buf.slice(-2048);
+    };
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', onData);
+    proc.on('error', (err) => this.log('ERROR', `[${type}/rcon] 进程错误: ${err.message}`));
+    proc.on('exit', (code, signal) => {
+      const expected = this._rconTunnelStopping;
+      this._rconTunnelStopping = false;
+      this.rconTunnelProc = null;
+      this.rconTunnelState = 'stopped';
+      this.rconTunnelAddr = null;
+      this.log(expected || code === 0 ? 'INFO' : 'WARN',
+        `[${type}/rcon] 隧道进程退出 (code=${code === null ? 'null' : code}${signal ? `, signal=${signal}` : ''})`);
+      this.emitState();
+    });
+    return { ok: true };
+  }
+
+  stopRconTunnel() {
+    if (!this.rconTunnelProc) return { ok: false, error: 'RCON 穿透未在运行' };
+    this._rconTunnelStopping = true;
+    try { this.rconTunnelProc.kill('SIGTERM'); } catch {}
+    return { ok: true };
+  }
+
+  /** SSH 类隧道的公共参数;port 是连中继服务器用的端口(pinggy 走 443) */
+  _sshOpts(port) {
+    ensureSshKey();
+    return [
+      '-T', '-p', port,
+      '-i', sshKeyPath(),
+      '-o', 'IdentitiesOnly=yes',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'UserKnownHostsFile=/dev/null',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ExitOnForwardFailure=yes',
+    ];
   }
 
   /* 隧道建立 4 秒后自动做一次真实连通性检测 */

@@ -516,7 +516,9 @@ router.delete('/:iid', asyncHandler(async (req, res) => {
   if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再删除' });
   inst.cancelAutoRestart();     // 否则实例都删了,几秒后那个定时器还会来拉一次
   if (inst.tunnelProc) inst.stopTunnel();
+  if (inst.rconTunnelProc) inst.stopRconTunnel();
   fs.rmSync(path.join(DATA_DIR, `frpc-${inst.id}.toml`), { force: true });
+  fs.rmSync(path.join(DATA_DIR, `frpc-rcon-${inst.id}.toml`), { force: true });
   fs.rmSync(path.join(DATA_DIR, `playit-${inst.id}.toml`), { force: true });
   fs.rmSync(path.join(DATA_DIR, 'crashes', `${inst.id}.json`), { force: true });
   playtime.remove(inst.id);     // 不留孤儿统计文件
@@ -1590,12 +1592,16 @@ router.delete('/:iid/tasks/:id', (req, res) => {
 
 router.get('/:iid/tunnel', (req, res) => {
   const inst = req.inst;
-  res.json({ ok: true, config: inst.tunnel, state: inst.tunnelState, addr: inst.tunnelAddr, error: inst.tunnelError, claim: inst.tunnelClaim });
+  res.json({
+    ok: true, config: inst.tunnel,
+    state: inst.tunnelState, addr: inst.tunnelAddr, error: inst.tunnelError, claim: inst.tunnelClaim,
+    rcon: { state: inst.rconTunnelState, addr: inst.rconTunnelAddr, error: inst.rconTunnelError },
+  });
 });
 
 router.put('/:iid/tunnel', (req, res) => {
   const inst = req.inst;
-  const { type, ngrok, frpc, bore, pinggy, serveo } = req.body || {};
+  const { type, ngrok, frpc, bore, pinggy, serveo, rcon } = req.body || {};
   if (!['none', 'ngrok', 'frpc', 'playit', 'bore', 'pinggy', 'serveo'].includes(type)) {
     return res.status(400).json({ ok: false, error: '类型无效' });
   }
@@ -1618,6 +1624,7 @@ router.put('/:iid/tunnel', (req, res) => {
     },
     pinggy: { token: String((pinggy && pinggy.token) || '').replace(/[^\w+-]/g, '').slice(0, 80) },
     serveo: { remotePort: Math.min(65535, Math.max(0, parseInt(serveo && serveo.remotePort, 10) || 0)) },
+    rcon: { remotePort: Math.min(65535, Math.max(0, parseInt(rcon && rcon.remotePort, 10) || 0)) },
   };
   saveRegistry();
   inst.log('INFO', `[MCSP] 穿透配置已保存 (${type === 'none' ? '不启用' : type})${inst.tunnelProc ? ',重启隧道后生效' : ''}`);
@@ -1626,6 +1633,21 @@ router.put('/:iid/tunnel', (req, res) => {
 
 router.post('/:iid/tunnel/start', (req, res) => res.json(req.inst.startTunnel()));
 router.post('/:iid/tunnel/stop', (req, res) => res.json(req.inst.stopTunnel()));
+
+/* RCON 端口的独立隧道。把 RCON 挂到公网影响面比游戏端口大得多,
+   所以这两个操作限定实例主人/管理员 —— operator 档不够格 */
+router.post('/:iid/tunnel/rcon/start', (req, res) => {
+  const inst = req.inst;
+  if (!isOwnerOrAdmin(req, inst)) return res.status(403).json({ ok: false, error: '只有实例主人可以开启 RCON 穿透' });
+  // 远端端口随启动请求带来并顺手持久化。这样前端不必为了改一个端口
+  // 去 PUT 整份穿透配置 —— 那会拿调用方的表单快照盖掉其它字段
+  if (req.body && 'remotePort' in req.body) {
+    inst.tunnel.rcon = { remotePort: Math.min(65535, Math.max(0, parseInt(req.body.remotePort, 10) || 0)) };
+    saveRegistry();
+  }
+  res.json(inst.startRconTunnel());
+});
+router.post('/:iid/tunnel/rcon/stop', (req, res) => res.json(req.inst.stopRconTunnel()));
 
 router.post('/:iid/tunnel/check', asyncHandler(async (req, res) => {
   const inst = req.inst;

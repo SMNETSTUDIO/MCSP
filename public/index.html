@@ -499,6 +499,37 @@
           <div class="tn-error" id="tn-error" hidden></div>
           <div class="dim small" style="margin-top:12px">隧道进程独立于服务端进程:重启实例不会断开隧道。公网地址建立后直接发给玩家即可加入。</div>
         </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
+            <span>RCON 穿透 <span class="task-badge off" id="tnr-state">未启动</span></span>
+            <span>
+              <button class="btn btn-green small-btn" id="tnr-start">启动</button>
+              <button class="btn btn-red small-btn" id="tnr-stop">停止</button>
+            </span>
+          </div>
+          <div class="tunnel-status" style="margin-bottom:6px">
+            <code id="tnr-addr" class="tn-addr" hidden></code>
+            <button class="icon-btn" id="tnr-copy" hidden>复制地址</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row"><label>指定远端端口<span class="dim small">0 = 自动分配</span></label><input id="tnr-port" type="number" min="0" max="65535" /></div>
+          </div>
+          <div class="tn-error" id="tnr-error" hidden></div>
+          <div class="dim small" style="margin-top:12px">
+            单独把 <b>RCON 端口</b>(不是游戏端口)映射到公网,这样不开面板也能用
+            mcrcon / 手机 App 之类的外部客户端管服。复用上方选好的穿透方式,
+            与游戏端口那条隧道各自独立 —— 可以只开其中一条。<br>
+            <b style="color:#ff9d96">⚠ 这比映射游戏端口危险得多,想清楚再开:</b>
+            RCON 协议<b>全程明文</b>,密码和命令都不加密,链路上任何人都能直接读到;
+            拿到 RCON 就等于拿到服务器控制台(op 自己、stop、ban,装了插件基本等于任意命令);
+            原版 RCON 几乎没有防爆破,挂公网上会被扫描器持续敲门。<br>
+            面板的硬性要求:必须已开启 RCON、密码至少 12 位(「设置 → RCON」的
+            「重新生成配置」会给一个 16 位随机密码)。<b>用完请及时停止</b>;
+            确实需要长期远程管理的话,自建 frps 走 frpc 比公共中继可控得多 —— 链路只经过你自己的服务器。<br>
+            playit 不支持:它的端口映射在自家控制台配置,面板没法替它申请第二个端口。
+          </div>
+        </div>
       </section>
 
       <!-- Backups -->

@@ -121,7 +121,10 @@ function shutdown() {
   require('./instance').panel.shuttingDown = true;
   for (const inst of registry.instances.values()) {
     inst.cancelAutoRestart();
-    if (inst.tunnelProc) { try { inst.tunnelProc.kill('SIGTERM'); } catch {} }
+    // 两条隧道都要收:RCON 那条留着的话,面板都关了公网还能连进控制台
+    for (const p of [inst.tunnelProc, inst.rconTunnelProc]) {
+      if (p) { try { p.kill('SIGTERM'); } catch {} }
+    }
     if (inst.proc) {
       try { inst.proc.stdin.write(inst.stopCmd + '\n'); } catch {}
     }
