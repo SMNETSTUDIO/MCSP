@@ -128,7 +128,9 @@ function switchView(view) {
   $$('.nav-item').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $$('.view').forEach((v) => v.classList.remove('active'));
   $('#view-' + view).classList.add('active');
-  const [title, sub] = VIEW_TITLES[view];
+  let [title, sub] = VIEW_TITLES[view];
+  // 普通用户看不到宿主机那张卡,副标题也别再提"宿主机"
+  if (view === 'overview' && me && me.role !== 'admin') sub = '你的实例一览';
   $('#view-title').textContent = title;
   const inst = instMap.get(currentIid);
   $('#topbar-sub').textContent = sub || (inst ? `${inst.name} · ${typeLabel(inst.type)} ${inst.version} · 端口 ${inst.port}` : '');
@@ -296,6 +298,14 @@ async function loadOverview() {
   instMap = new Map(list.map((i) => [i.id, i]));
   renderInstSelect();
 
+  // 宿主机一栏只有管理员能看:普通用户拿到的 /host 压根没有这些字段
+  if (host.isAdmin) renderHostCard(host);
+
+  renderDiskBreakdown(host);
+  renderInstGrid();
+}
+
+function renderHostCard(host) {
   $('#host-name').textContent = `${host.hostname} · ${host.platform}`;
   const memPct = Math.round(((host.totalMem - host.freeMem) / host.totalMem) * 100);
   $('#host-grid').innerHTML = [
@@ -311,9 +321,6 @@ async function loadOverview() {
     ['实例', `${host.runningCount} <span class="dim small">运行 / ${host.instanceCount} 总数</span>`],
     ['架构', `${escapeHtml(host.platform.split(' ')[0])} ${host.arch}`],
   ].map(([l, v]) => `<div class="host-item"><div class="h-label">${l}</div><div class="h-value">${v}</div></div>`).join('');
-
-  renderDiskBreakdown(host);
-  renderInstGrid();
 }
 
 /* 各实例吃了多少磁盘 —— 只有存在实例时才显示,空面板不摆一张空卡片 */

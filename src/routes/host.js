@@ -27,33 +27,42 @@ function isNewer(a, b) {
 
 const router = express.Router();
 
+/* 宿主机硬件/系统信息只给管理员:主机名、CPU 型号、内核版本、负载、总内存、
+   Node 版本、整机磁盘这些是运维视角的东西,泄给租户既没用又多一份指纹。
+   普通用户仍拿得到面板版本与"自己看得见的实例"的计数和磁盘占用。 */
 router.get('/host', asyncHandler(async (req, res) => {
-  const cpus = os.cpus();
-  const javaVersion = java.bestJavaVersionLine();
+  const isAdmin = req.user.role === 'admin';
   // 实例计数只统计当前用户可见的(普通用户之间互相隔离)
   const visible = [...instances.values()].filter((i) => i.canAccess(req.user));
-  res.json({
-    hostname: os.hostname(),
-    platform: `${os.type()} ${os.release()}`,
-    arch: os.arch(),
-    cpuModel: cpus[0] ? cpus[0].model : 'unknown',
-    cores: cpus.length,
-    loadavg: os.loadavg().map((n) => +n.toFixed(2)),
-    totalMem: Math.round(os.totalmem() / 1048576),
-    freeMem: Math.round(os.freemem() / 1048576),
-    nodeVersion: process.version,
-    javaVersion,
-    java: java.javaInfo(),
+  const body = {
+    isAdmin,
     panelVersion: PANEL_VERSION,
     panelUptime: Date.now() - PANEL_STARTED,
     instanceCount: visible.length,
     runningCount: visible.filter((i) => i.state === 'running').length,
-    disk: await disk.hostDisk(),
     // 谁在吃磁盘 —— 只列当前用户看得见的实例
     instanceDisk: visible
       .map((i) => ({ id: i.id, name: i.name, icon: i.icon, ...disk.instanceUsage(i.id) }))
       .sort((a, b) => b.totalMB - a.totalMB),
-  });
+  };
+  if (isAdmin) {
+    const cpus = os.cpus();
+    Object.assign(body, {
+      hostname: os.hostname(),
+      platform: `${os.type()} ${os.release()}`,
+      arch: os.arch(),
+      cpuModel: cpus[0] ? cpus[0].model : 'unknown',
+      cores: cpus.length,
+      loadavg: os.loadavg().map((n) => +n.toFixed(2)),
+      totalMem: Math.round(os.totalmem() / 1048576),
+      freeMem: Math.round(os.freemem() / 1048576),
+      nodeVersion: process.version,
+      javaVersion: java.bestJavaVersionLine(),
+      java: java.javaInfo(),
+      disk: await disk.hostDisk(),
+    });
+  }
+  res.json(body);
 }));
 
 /* 更新检查。?force=1 跳过缓存(用户点「检查更新」时用)。
@@ -75,8 +84,9 @@ router.get('/version', asyncHandler(async (req, res) => {
   });
 }));
 
-/* Java 运行时:状态查询 + 一键安装全部缺失版本 */
-router.get('/java', (req, res) => res.json(java.javaInfo()));
+/* Java 运行时:状态查询 + 一键安装全部缺失版本。
+   查询也要管理员 —— 装了哪些 JRE、装在哪、宿主机什么架构,同样是宿主机信息 */
+router.get('/java', requireAdmin, (req, res) => res.json(java.javaInfo()));
 
 router.post('/java/install', requireAdmin, asyncHandler(async (req, res) => {
   try {
