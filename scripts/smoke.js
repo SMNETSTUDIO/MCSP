@@ -31,6 +31,114 @@ function check(name, cond, detail = '') {
 }
 
 /**
+ * 多租户 / 权限边界用例(功能 15)。
+ *
+ * 原来的冒烟测试全程用一个 admin 会话,所以"普通用户看不见别人的东西"、
+ * "配额真的拦得住"、"协作者不能删实例"这些最容易写错、又最要命的路径
+ * 一条都没覆盖 —— 恰恰是多租户面板出事的地方。
+ *
+ * 这里的做法是真开第二个会话:cookie 是模块级的单变量,所以进出都要显式
+ * 保存/恢复,不然会把 admin 的会话踩掉,后面的用例全部假失败。
+ */
+async function multiTenantSuite() {
+  const adminCookie = cookie;
+  const uname = `smoke_u_${Date.now().toString(36)}`;
+  const upass = 'smokepass123';
+  let r;
+
+  // 建一个配额很小的普通用户:1 个实例 / 1 GB 内存
+  r = await req('POST', '/api/users', {
+    username: uname, password: upass, role: 'user',
+    limits: { maxInstances: 1, maxMemMB: 1024, maxCpuCores: 1, maxDiskMB: 1024 },
+  });
+  check('tenant: 建普通用户', r.json && r.json.ok, JSON.stringify(r.json));
+
+  // 邀请链接:签发 → 公开校验 → 不能造管理员 → 一次性
+  r = await req('POST', '/api/users/invites', { expiresInHours: 1, note: 'smoke' });
+  const invTok = r.json && r.json.token;
+  check('invite: 签发', !!invTok);
+  if (invTok) {
+    const saved = cookie;
+    cookie = '';                                   // 未登录状态访问,校验它真的是公开端点
+    r = await req('GET', `/api/auth/invite/${invTok}`);
+    check('invite: 免登录可校验', r.status === 200 && r.json.ok);
+    const invUser = `${uname}_inv`;
+    r = await req('POST', `/api/auth/invite/${invTok}`, { username: invUser, password: upass, role: 'admin' });
+    check('invite: 兑换成功', r.json && r.json.ok, JSON.stringify(r.json));
+    check('invite: 无法自封管理员', r.json && r.json.user && r.json.user.role === 'user',
+      r.json && r.json.user && r.json.user.role);
+    cookie = '';
+    r = await req('POST', `/api/auth/invite/${invTok}`, { username: `${invUser}2`, password: upass });
+    check('invite: 一次性(重复兑换被拒)', r.status === 400 && !r.json.ok);
+    cookie = saved;
+    // 清掉邀请建出来的账号,别在别人的面板里留垃圾
+    cookie = adminCookie;
+    await req('DELETE', `/api/users/${invUser}`);
+    await req('DELETE', `/api/users/invites/${invTok}`);
+  }
+
+  // 切到普通用户会话
+  cookie = '';
+  r = await req('POST', '/api/auth/login', { username: uname, password: upass });
+  const tenantOk = r.json && r.json.ok;
+  check('tenant: 登录', tenantOk);
+
+  if (tenantOk) {
+    // 宿主机信息隔离
+    r = await req('GET', '/api/host');
+    check('tenant: /api/host 不含宿主机字段',
+      r.status === 200 && r.json.hostname === undefined && r.json.cpuModel === undefined,
+      JSON.stringify(Object.keys(r.json || {})));
+    check('tenant: /api/host 仍给自己的实例计数', r.json && typeof r.json.instanceCount === 'number');
+
+    // 设置里的推送凭据不能外泄
+    r = await req('GET', '/api/settings');
+    check('tenant: /api/settings 不含 notify 凭据', r.status === 200 && r.json.notify === undefined,
+      JSON.stringify(Object.keys(r.json || {})));
+
+    // 管理员专属端点一律 403
+    for (const [m, p] of [['GET', '/api/users'], ['GET', '/api/audit'], ['GET', '/api/java'],
+                          ['GET', '/api/panel/export'], ['GET', '/api/users/invites/list']]) {
+      r = await req(m, p);
+      check(`tenant: ${p} → 403`, r.status === 403, String(r.status));
+    }
+
+    // 配额:超出内存上限的实例必须被拒
+    r = await req('POST', '/api/instances/import', { name: 'smoke-over-quota', xmx: 8192 });
+    check('tenant: 超内存配额被拒', !(r.json && r.json.ok) || r.status >= 400,
+      JSON.stringify(r.json));
+    if (r.json && r.json.ok && r.json.id) await req('DELETE', `/api/instances/${r.json.id}`);
+
+    // 看不见别人的实例
+    r = await req('GET', '/api/instances');
+    check('tenant: 实例列表已隔离', Array.isArray(r.json) && r.json.every((i) => i.owner === uname),
+      JSON.stringify((r.json || []).map((i) => i.owner)));
+  }
+
+  // 收尾:恢复 admin 会话并删掉测试用户
+  cookie = adminCookie;
+  r = await req('DELETE', `/api/users/${uname}`);
+  check('tenant: 清理测试用户', r.json && r.json.ok !== false);
+
+  // 面板配置导出:结构完整、含管理员(导入端的护栏就靠这条)
+  r = await req('GET', '/api/panel/export');
+  check('panel backup: 导出可用', r.status === 200);
+  r = await req('POST', '/api/panel/import/preview', { bundle: { format: 'nope' } });
+  check('panel backup: 拒绝非备份文件', r.status === 400);
+  r = await req('POST', '/api/panel/import/preview', {
+    bundle: { format: 'mcsp-panel-backup', formatVersion: 1, data: { 'users.json': [{ username: 'x', role: 'user' }] } },
+  });
+  check('panel backup: 拒绝无管理员的备份', r.status === 400 && /管理员/.test(r.json.error || ''),
+    JSON.stringify(r.json));
+
+  // 阈值校验:越界值必须被夹住而不是写进去
+  r = await req('PUT', '/api/settings', { thresholds: { diskWarnPct: 5, crashWindowMin: 99999 } });
+  const th = r.json && r.json.settings && r.json.settings.thresholds;
+  check('thresholds: 越界值被拒', th && th.diskWarnPct !== 5 && th.crashWindowMin !== 99999,
+    JSON.stringify(th));
+}
+
+/**
  * 压缩模块的本地往返:不碰面板数据,在临时目录里打包再解回来比对。
  * zip 是我们自己按格式写的,不跑一遍很难发现头字段错位。
  */
@@ -254,6 +362,11 @@ async function uniqueNameRoundtrip() {
 
   r = await req('GET', '/api/instances/not-exist/status');
   check('404 instance', r.status === 404);
+
+  /* ── 多租户与新功能的集成用例(功能 15)──
+     这一段专门覆盖"跨用户"和"权限边界",单用户的 happy path 测不到这些。
+     全部在 admin 会话下建资源、切到普通用户会话验证隔离,最后清理干净。 */
+  if (isAdmin) await multiTenantSuite();
 
   // 畸形 JSON 应该是 400(客户端错),不是 500
   {
