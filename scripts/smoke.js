@@ -30,6 +30,50 @@ async function req(method, path, body) {
   return { status: res.status, json };
 }
 
+/**
+ * 增量备份链(功能 5)。
+ *
+ * 重点不是"能不能生成",而是链的完整性 —— 增量恢复错一步得到的是几个时间点
+ * 混在一起的世界,它看起来是成功的,这比恢复失败危险得多。
+ * 所以这里专测:元数据对不对、链断了会不会拒绝、清理会不会把全量删了留下孤儿。
+ */
+async function incrementalBackupSuite(iid) {
+  let r = await req('POST', `/api/instances/${iid}/backups`, { name: 'smoke-inc', mode: 'full' });
+  check('incremental: 建立全量基准', r.json && r.json.ok && r.json.mode === 'full', JSON.stringify(r.json));
+  const fullId = r.json && r.json.id;
+
+  r = await req('POST', `/api/instances/${iid}/backups`, { name: 'smoke-inc', mode: 'incremental' });
+  const incOk = r.json && r.json.ok && r.json.mode === 'incremental';
+  check('incremental: 追加增量', incOk, JSON.stringify(r.json));
+  const incId = r.json && r.json.id;
+
+  r = await req('GET', `/api/instances/${iid}/backups`);
+  const list = Array.isArray(r.json) ? r.json : [];
+  const inc = list.find((b) => b.id === incId);
+  check('incremental: 列表带链元数据',
+    !!inc && inc.type === 'inc' && inc.base === fullId && inc.seq >= 1,
+    JSON.stringify(inc));
+
+  // 预览要把"要按顺序应用几个归档"讲清楚
+  r = await req('GET', `/api/instances/${iid}/backups/${incId}/inspect`);
+  check('incremental: 预览列出整条链',
+    r.json && r.json.ok && Array.isArray(r.json.chain) && r.json.chain.length >= 2 && r.json.chain[0] === fullId,
+    JSON.stringify(r.json && r.json.chain));
+
+  // 全量的预览不该带链
+  r = await req('GET', `/api/instances/${iid}/backups/${fullId}/inspect`);
+  check('incremental: 全量预览为单份', r.json && r.json.ok && r.json.type === 'full'
+    && (!r.json.chain || r.json.chain.length === 1), JSON.stringify(r.json && r.json.chain));
+
+  // 删掉基准全量后,增量必须拒绝恢复而不是解出半个世界
+  await req('DELETE', `/api/instances/${iid}/backups/${fullId}`);
+  r = await req('POST', `/api/instances/${iid}/backups/${incId}/restore`);
+  check('incremental: 链断裂时拒绝恢复',
+    r.json && r.json.ok === false && /全量|不完整/.test(r.json.error || ''), JSON.stringify(r.json));
+
+  await req('DELETE', `/api/instances/${iid}/backups/${incId}`);
+}
+
 /** 当前时间片的 TOTP 码;没配密钥就返回 undefined(登录接口会忽略它) */
 function totpNow() {
   if (!TOTP_SECRET) return undefined;
@@ -404,6 +448,8 @@ async function uniqueNameRoundtrip() {
 
   r = await req('GET', '/api/instances/not-exist/status');
   check('404 instance', r.status === 404);
+
+  if (inst) await incrementalBackupSuite(inst.id);
 
   /* ── 多租户与新功能的集成用例(功能 15)──
      这一段专门覆盖"跨用户"和"权限边界",单用户的 happy path 测不到这些。

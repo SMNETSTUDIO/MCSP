@@ -859,9 +859,10 @@ router.post('/:iid/backups', asyncHandler(async (req, res) => {
   // 备份是实例目录的 tar.gz,压完只会更小,拿目录体积做保守预检
   const dqerr = diskQuotaError(req, disk.instanceUsage(req.inst.id).instMB);
   if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
-  const r = await createBackup(req.inst, req.body && req.body.name);
+  const r = await createBackup(req.inst, req.body && req.body.name,
+    { mode: req.body && req.body.mode });
   disk.refresh(req.inst.id);      // 保留策略可能顺手删了旧包,增量算不准,直接重算
-  res.json(r.ok ? { ok: true, backups: listBackups(req.inst) } : r);
+  res.json(r.ok ? { ...r, backups: listBackups(req.inst) } : r);
 }));
 
 /* 恢复前预览:列归档内容、验完整性、指出哪些现有目录会被盖掉。只读 */

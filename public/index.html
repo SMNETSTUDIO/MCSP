@@ -505,8 +505,11 @@
       <section class="view" id="view-backups">
         <div class="card glass">
           <div class="card-title row-between">
-            <span>备份管理</span>
-            <button class="btn btn-blue" id="backup-create"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>立即备份</button>
+            <span>备份管理 <span class="dim small" id="bk-inc-note"></span></span>
+            <span>
+              <button class="icon-btn" id="backup-create-inc"><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>增量备份</button>
+              <button class="btn btn-blue" id="backup-create"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>全量备份</button>
+            </span>
           </div>
           <div id="backup-list" class="backup-list"></div>
         </div>

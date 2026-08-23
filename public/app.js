@@ -2108,11 +2108,19 @@ $('#tn-copy').addEventListener('click', async () => {
 async function loadBackups() {
   loadCrashes();
   const backups = await iapi('/backups');
+  // 增量链在列表里要一眼看得出来:哪份是基准、哪份挂在它下面
+  const hasChain = backups.some((b) => b.type === 'inc');
+  $('#bk-inc-note').textContent = hasChain ? '含增量链 —— 恢复增量会自动按顺序应用整条链' : '';
   $('#backup-list').innerHTML = backups.length ? backups.map((b) => `
     <div class="backup-item">
       <div class="backup-ico">${ico('archive')}</div>
       <div>
-        <div class="backup-name">${escapeHtml(b.name)}</div>
+        <div class="backup-name">
+          ${escapeHtml(b.name)}
+          ${b.type === 'inc'
+            ? `<span class="task-badge off" title="基于 ${escapeHtml(b.base || '')}">增量 #${b.seq}</span>`
+            : (hasChain ? '<span class="task-badge on">全量基准</span>' : '')}
+        </div>
         <div class="backup-meta">${fmtSize(b.size)} · ${fmtAgo(b.createdAt)}</div>
       </div>
       <div class="spacer"></div>
@@ -2122,10 +2130,21 @@ async function loadBackups() {
     </div>`).join('') : '<div class="empty">暂无备份</div>';
 }
 
-$('#backup-create').addEventListener('click', async () => {
-  const r = await iapi('/backups', { method: 'POST', body: {} });
-  if (r.ok) { toast('备份已创建'); loadBackups(); }
-});
+async function runBackup(mode) {
+  toast(mode === 'incremental' ? '正在做增量备份…' : '正在做全量备份…');
+  const r = await iapi('/backups', { method: 'POST', body: { mode } });
+  if (!r.ok) return toast(r.error, true);
+  // 如实回报实际做了哪种:请求增量但没有基准链时后端会落回全量,
+  // 不说清楚的话用户对磁盘增长的预期就是错的
+  const fellBack = mode === 'incremental' && r.mode === 'full';
+  toast(fellBack
+    ? `已改做全量备份(${r.sizeMB} MB)—— 还没有可追加的基准链`
+    : `${r.mode === 'incremental' ? '增量' : '全量'}备份完成(${r.sizeMB} MB)`);
+  loadBackups();
+}
+
+$('#backup-create').addEventListener('click', () => runBackup('full'));
+$('#backup-create-inc').addEventListener('click', () => runBackup('incremental'));
 
 /* ───────── 在线时长 ───────── */
 
@@ -2247,8 +2266,13 @@ $('#backup-list').addEventListener('click', async (e) => {
     // 会盖掉什么摊开给用户看。顺带验一遍归档没坏(坏包在这一步就拦下)
     const p = await iapi(`/backups/${btn.dataset.id}/inspect`);
     if (!p.ok) return toast(p.error, true);
+    if (p.chainError) return toast(p.chainError, true);
     const lines = [
       `备份 ${btn.dataset.id}`,
+      ...(p.type === 'inc' && p.chain && p.chain.length > 1
+        ? [`这是增量备份,将按顺序应用 ${p.chain.length} 个归档:`,
+           ...p.chain.map((c, i) => `  ${i + 1}. ${c}`), '']
+        : []),
       `包含 ${p.fileCount} 个文件` + (p.worlds.length ? `,世界:${p.worlds.join('、')}` : ',未发现世界存档'),
       p.hasPlugins ? '含插件/模组目录' : '不含插件/模组目录',
       p.hasProps ? '含 server.properties' : '不含 server.properties',
@@ -2257,7 +2281,11 @@ $('#backup-list').addEventListener('click', async (e) => {
         ? `以下现有内容会被覆盖(不可撤销):\n  ${p.overwrite.join('\n  ')}`
         : '当前实例目录为空,不会覆盖任何东西。',
       '',
-      '注意:恢复只做覆盖,不会删除备份里没有的文件。',
+      // 全量和增量在"删除"这件事上行为不同,不能用同一句话糊过去:
+      // 增量链带着目录清单,tar --incremental 会把当时删掉的文件真的删掉
+      p.type === 'inc'
+        ? '注意:增量恢复会重放删除操作 —— 备份时点已删除的文件会从实例目录中移除。'
+        : '注意:恢复只做覆盖,不会删除备份里没有的文件。',
       '确定恢复吗?',
     ];
     if (!confirm(lines.join('\n'))) return;
