@@ -161,15 +161,15 @@
       <!-- Overview -->
       <section class="view active" id="view-overview">
         <div class="card glass host-card">
-          <div class="card-title">宿主机 <span class="dim small" id="host-name"></span></div>
+          <h2 class="card-title">宿主机 <span class="dim small" id="host-name"></span></h2>
           <div class="host-grid" id="host-grid"></div>
         </div>
         <div class="card glass" id="disk-breakdown" style="margin-top:18px" hidden>
-          <div class="card-title">磁盘占用 <span class="dim small">实例目录 + 备份,每分钟刷新</span></div>
+          <h2 class="card-title">磁盘占用 <span class="dim small">实例目录 + 备份,每分钟刷新</span></h2>
           <div id="disk-rows"></div>
         </div>
         <div class="overview-head">
-          <div class="card-title" style="margin:0">实例列表</div>
+          <h2 class="card-title" style="margin:0">实例列表</h2>
           <button class="icon-btn" id="bulk-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>全部启动</button>
           <button class="icon-btn danger" id="bulk-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>全部停止</button>
           <button class="btn btn-blue" id="inst-create"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>新建实例</button>
@@ -222,7 +222,7 @@
             </div>
           </div>
           <div class="card glass">
-            <div class="card-title">实时动态</div>
+            <h2 class="card-title">实时动态</h2>
             <div id="dash-log" class="mini-log"></div>
           </div>
         </div>
@@ -265,16 +265,16 @@
       <section class="view" id="view-players">
         <div class="players-row">
           <div class="card glass">
-            <div class="card-title">在线玩家 <span class="pill pill-blue" id="pl-count">0</span></div>
+            <h2 class="card-title">在线玩家 <span class="pill pill-blue" id="pl-count">0</span></h2>
             <div id="player-list" class="player-list"></div>
           </div>
           <div class="stack">
             <div class="card glass">
-              <div class="card-title">封禁列表</div>
+              <h2 class="card-title">封禁列表</h2>
               <div id="ban-list" class="tag-list"></div>
             </div>
             <div class="card glass">
-              <div class="card-title">白名单</div>
+              <h2 class="card-title">白名单</h2>
               <div id="wl-list" class="tag-list"></div>
               <div class="inline-add">
                 <input id="wl-input" type="text" placeholder="玩家名…" />
@@ -343,7 +343,7 @@
         </div>
         <div class="card glass editor-card" id="fm-editor" hidden>
           <div class="files-toolbar">
-            <div class="card-title" style="margin:0" id="fm-editor-name">编辑</div>
+            <h2 class="card-title" style="margin:0" id="fm-editor-name">编辑</h2>
             <div class="spacer"></div>
             <button class="btn btn-blue small-btn" id="fm-save">保存</button>
             <button class="icon-btn" id="fm-close">关闭</button>
@@ -355,7 +355,7 @@
       <!-- Tasks -->
       <section class="view" id="view-tasks">
         <div class="card glass">
-          <div class="card-title">新建计划任务</div>
+          <h2 class="card-title">新建计划任务</h2>
           <div class="task-form">
             <input id="task-name" type="text" placeholder="任务名称,如 凌晨自动重启" />
             <select id="task-action">
@@ -376,7 +376,7 @@
           </div>
         </div>
         <div class="card glass" style="margin-top:18px">
-          <div class="card-title">任务列表</div>
+          <h2 class="card-title">任务列表</h2>
           <div id="task-list" class="backup-list"></div>
         </div>
       </section>
@@ -384,12 +384,12 @@
       <!-- Tunnel -->
       <section class="view" id="view-tunnel">
         <div class="card glass">
-          <div class="card-title">穿透组件 <span class="dim small">面板级安装,所有实例共用二进制</span></div>
+          <h2 class="card-title">穿透组件 <span class="dim small">面板级安装,所有实例共用二进制</span></h2>
           <div id="tunnel-components" class="backup-list"></div>
         </div>
 
         <div class="card glass" style="margin-top:18px">
-          <div class="card-title">实例穿透配置 <span class="dim small">每个实例独立,隧道指向本实例端口</span></div>
+          <h2 class="card-title">实例穿透配置 <span class="dim small">每个实例独立,隧道指向本实例端口</span></h2>
           <div class="task-form" style="margin-bottom:14px">
             <select id="tn-type">
               <option value="none">不启用</option>
@@ -455,7 +455,7 @@
         </div>
 
         <div class="card glass" style="margin-top:18px">
-          <div class="card-title">隧道状态</div>
+          <h2 class="card-title">隧道状态</h2>
           <div class="tunnel-status">
             <span class="pill pill-gray" id="tn-state">未启动</span>
             <code id="tn-addr" class="tn-addr" hidden></code>
@@ -561,7 +561,7 @@
           </div>
         </div>
         <div class="card glass" id="cfg-files-card" style="margin-bottom:18px" hidden>
-          <div class="card-title">常见配置文件 <span class="dim small">只列这个实例里真实存在的,点「编辑」跳到文件编辑器</span></div>
+          <h2 class="card-title">常见配置文件 <span class="dim small">只列这个实例里真实存在的,点「编辑」跳到文件编辑器</span></h2>
           <div id="cfg-files"></div>
         </div>
         <div class="card glass" style="margin-bottom:18px">
@@ -632,7 +632,7 @@
       <!-- Users (admin) -->
       <section class="view" id="view-users">
         <div class="card glass">
-          <div class="card-title">新建用户</div>
+          <h2 class="card-title">新建用户</h2>
           <div class="task-form">
             <input id="user-name" type="text" placeholder="用户名" />
             <input id="user-pass" type="password" placeholder="密码(至少 6 位)" />
@@ -651,7 +651,7 @@
           <div class="dim small" style="margin-top:10px">普通用户的实例互相隔离(只有管理员能看到全部);内存为其全部实例 -Xmx 之和的上限,CPU 为启动时绑定的核数(taskset),磁盘为其全部实例目录 + 备份的体积上限(上传/解压/打包/备份时校验)。管理员不受限。</div>
         </div>
         <div class="card glass" style="margin-top:18px">
-          <div class="card-title">用户列表 <span class="dim small" id="user-count"></span></div>
+          <h2 class="card-title">用户列表 <span class="dim small" id="user-count"></span></h2>
           <div id="user-list" class="backup-list"></div>
           <div class="user-pager" id="user-pager" hidden>
             <button class="btn btn-ghost small-btn" data-upage="prev">‹ 上一页</button>
@@ -718,7 +718,7 @@
             <div class="prop-row"><label>Telegram Bot Token</label><input id="nt-tgtoken" type="password" autocomplete="new-password" placeholder="123456:ABC-…" /></div>
             <div class="prop-row"><label>Telegram Chat ID</label><input id="nt-tgchat" placeholder="-1001234567890" /></div>
           </div>
-          <div class="card-title" style="margin-top:16px;font-size:13px">推送哪些事件</div>
+          <h2 class="card-title" style="margin-top:16px;font-size:13px">推送哪些事件</h2>
           <div class="props-grid" id="nt-events"></div>
           <div class="dim small" id="nt-result" style="margin-top:12px"></div>
           <div class="dim small" style="margin-top:12px">
@@ -762,8 +762,8 @@
 
   <!-- user limits modal -->
   <div class="modal-mask" id="limits-modal" hidden>
-    <div class="card glass modal">
-      <div class="card-title">资源配额 <span class="dim small" id="limits-user"></span></div>
+    <div class="card glass modal" role="dialog" aria-modal="true" aria-labelledby="limits-title">
+      <h2 class="card-title" id="limits-title">资源配额 <span class="dim small" id="limits-user"></span></h2>
       <div class="field-col">
         <label class="dim small">实例数上限</label>
         <input id="lim-inst" type="number" min="1" max="12" />
@@ -783,8 +783,8 @@
 
   <!-- password modal -->
   <div class="modal-mask" id="pw-modal" hidden>
-    <div class="card glass modal">
-      <div class="card-title">修改密码</div>
+    <div class="card glass modal" role="dialog" aria-modal="true" aria-labelledby="pw-title">
+      <h2 class="card-title" id="pw-title">修改密码</h2>
       <div class="field-col">
         <input id="pw-old" type="password" placeholder="当前密码" />
         <input id="pw-new" type="password" placeholder="新密码(至少 6 位)" />
@@ -802,8 +802,8 @@
 
   <!-- create instance modal -->
   <div class="modal-mask" id="inst-modal" hidden>
-    <div class="card glass modal">
-      <div class="card-title">新建实例 <span class="dim small">从官方源下载服务端</span></div>
+    <div class="card glass modal" role="dialog" aria-modal="true" aria-labelledby="inst-title">
+      <h2 class="card-title" id="inst-title">新建实例 <span class="dim small">从官方源下载服务端</span></h2>
       <div class="field-col">
         <input id="ni-name" type="text" placeholder="实例名称,如 生存服 · Survival" />
         <div class="row-2">
@@ -840,8 +840,8 @@
 
   <!-- appearance modal -->
   <div class="modal-mask" id="ap-modal" hidden>
-    <div class="card glass modal">
-      <div class="card-title">外观设置 <span class="dim small">保存在本浏览器</span></div>
+    <div class="card glass modal" role="dialog" aria-modal="true" aria-labelledby="ap-title">
+      <h2 class="card-title" id="ap-title">外观设置 <span class="dim small">保存在本浏览器</span></h2>
 
       <div class="appearance-row">
         <div class="appearance-label">界面风格</div>
@@ -896,7 +896,7 @@
     </div>
   </div>
 
-  <div id="toast" class="toast glass"></div>
+  <div id="toast" class="toast glass" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="app.js"></script>
 </body>
 </html>

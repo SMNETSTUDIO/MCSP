@@ -18,7 +18,7 @@
   --glass-base: rgba(10, 12, 19, 0.62);      /* 玻璃底色,压住背后极光的色偏 */
   --surface-solid: rgba(8, 10, 16, 0.92);    /* 日志/表格这类密集正文的实底 */
   --text: rgba(255, 255, 255, 0.92);
-  --text-dim: rgba(255, 255, 255, 0.52);
+  --text-dim: rgba(255, 255, 255, 0.62);   /* 0.52 时次级文字对比度不足 4.5:1 */
   --page-bg: #0b0d14;
   --blue: rgb(var(--acc-rgb));
   --green: #30d158;
@@ -32,6 +32,26 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body { height: 100%; }
+
+/* 键盘焦点。此前全站没有一条 :focus-visible,UA 默认轮廓是近黑色 ——
+   在深色面板上等于不可见,用 Tab 导航时完全不知道自己在哪。
+   用 :focus-visible 而非 :focus,鼠标点击不会留下焦点环。 */
+:focus-visible {
+  outline: 2px solid rgb(var(--acc-rgb));
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* 圆角元素让焦点环贴合自身形状,别在圆角外画方框 */
+.btn:focus-visible, .icon-btn:focus-visible, .nav-item:focus-visible,
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+/* 输入框另外补一圈,因为它们本来就把 outline 关掉了靠边框表示状态 */
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid rgb(var(--acc-rgb));
+  border-color: rgba(var(--acc-rgb), 0.55);
+}
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
@@ -115,8 +135,17 @@ body {
   100% { transform: translate(0, 0) scale(1); }
 }
 
+/* 原来只关了背景极光,视图淡入、弹窗、toast、按钮缩放依旧在动 ——
+   对前庭敏感的用户来说那几项才是真正难受的 */
 @media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .bg::before, .blob { animation: none !important; }
+  .btn:active, .nav-item:active { transform: none; }
 }
 
 .noise {
@@ -689,13 +718,14 @@ body {
 .nav-toggle:hover { color: rgba(255, 255, 255, 0.85); background: rgba(255, 255, 255, 0.05); }
 .nav-caret {
   width: 12px; font-size: 10px; line-height: 1; text-align: center;
-  color: rgba(255, 255, 255, 0.35);
+  /* 曾经写死白色 35%,浅色主题下就是白底白字 —— 折叠箭头整个消失了 */
+  color: currentColor; opacity: 0.65;
   transition: transform 0.2s;
 }
 .nav-group.collapsed .nav-caret { transform: rotate(-90deg); }
 .nav-group-body { overflow: hidden; max-height: 620px; transition: max-height 0.25s ease; }
 .nav-group.collapsed .nav-group-body { max-height: 0; }
-[data-theme="light"] .nav-toggle { color: rgba(60, 60, 67, 0.45); }
+[data-theme="light"] .nav-toggle { color: rgba(60, 60, 67, 0.72); }
 [data-theme="light"] .nav-toggle:hover { color: rgba(60, 60, 67, 0.8); background: rgba(0, 0, 0, 0.05); }
 [data-theme="light"] .nav-group { border-top-color: rgba(0, 0, 0, 0.08); }
 
@@ -1012,7 +1042,7 @@ body {
   --glass-base: rgba(255, 255, 255, 0.55);
   --surface-solid: rgba(255, 255, 255, 0.94);
   --text: #1d1d1f;
-  --text-dim: rgba(60, 60, 67, 0.62);
+  --text-dim: rgba(60, 60, 67, 0.78);
   --page-bg: #e8ecf4;
 }
 [data-theme="light"] .surface-solid { border-color: rgba(0, 0, 0, 0.08); }

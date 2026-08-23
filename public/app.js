@@ -2282,6 +2282,52 @@ matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
   if (appearance.theme === 'auto') applyAppearance();
 });
 
+/* ───────── 弹窗通用行为 ─────────
+   四个弹窗此前只是 .hidden 开关:按 Esc 关不掉,Tab 会走到弹窗背后的页面上,
+   关闭后焦点掉回 <body>。这些都是键盘和读屏用户绕不过去的。
+   四个弹窗开关点散落在各处,所以用 MutationObserver 兜住每条路径,
+   而不是去十来个调用点各补一遍(将来新增弹窗也自动生效)。 */
+(function modalBehaviour() {
+  const masks = $$('.modal-mask');
+  if (!masks.length) return;
+  let lastOutsideFocus = null;
+
+  const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  const focusables = (m) => [...m.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+  const openMask = () => masks.filter((m) => !m.hidden).pop();
+
+  // 记住弹窗外最后一个获得焦点的元素,关闭时好还回去
+  document.addEventListener('focusin', (e) => {
+    if (!e.target.closest || !e.target.closest('.modal-mask')) lastOutsideFocus = e.target;
+  });
+
+  for (const m of masks) {
+    new MutationObserver(() => {
+      if (!m.hidden) {
+        // 有些调用点自己会 focus 输入框,别抢
+        if (!m.contains(document.activeElement)) {
+          const f = focusables(m);
+          if (f.length) f[0].focus();
+        }
+      } else if (lastOutsideFocus && document.body.contains(lastOutsideFocus)) {
+        lastOutsideFocus.focus();
+      }
+    }).observe(m, { attributes: true, attributeFilter: ['hidden'] });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    const open = openMask();
+    if (!open) return;
+    if (e.key === 'Escape') { e.preventDefault(); open.hidden = true; return; }
+    if (e.key !== 'Tab') return;
+    const f = focusables(open);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+})();
+
 $('#btn-appearance').addEventListener('click', () => { applyAppearance(); $('#ap-modal').hidden = false; });
 $('#ap-close').addEventListener('click', () => { $('#ap-modal').hidden = true; });
 $('#ap-reset').addEventListener('click', () => { appearance = { ...AP_DEFAULT }; applyAppearance(); });
