@@ -102,12 +102,15 @@ router.delete('/:name', (req, res) => {
   users.splice(i, 1);
   dropUserSessions(name);
   saveUsers();
-  // 从所有实例的协作者名单里摘掉,否则会残留一个已不存在的用户名
+  /* 从所有实例的协作者名单里摘掉,否则会残留一个已不存在的用户名。
+     名单里两种形态都可能有:老的 'alice' 和带权限档的 {name:'alice',...},
+     只按字符串比会把后者漏掉 —— 留下一条指向已删除用户的记录。 */
   const { saveRegistry } = require('../registry');
+  const nameOf = (c) => (typeof c === 'string' ? c : (c && c.name));
   let touched = 0;
   for (const inst of instances.values()) {
-    if (!inst.collaborators.includes(name)) continue;
-    inst.collaborators = inst.collaborators.filter((c) => c !== name);
+    if (!inst.collaborators.some((c) => nameOf(c) === name)) continue;
+    inst.collaborators = inst.collaborators.filter((c) => nameOf(c) !== name);
     touched++;
   }
   if (touched) saveRegistry();

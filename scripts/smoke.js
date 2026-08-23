@@ -126,14 +126,26 @@ async function collabRoleSuite(iid) {
     (await as(users.manager, 'PUT', '/collaborators', { users: [] })) === 403);
   check('collab manager: 禁止删实例', (await as(users.manager, 'DELETE', '')) === 403);
 
-  // 收尾:恢复原名单并删掉测试账号
+  /* 删用户要把他从协作者名单里摘干净。只按字符串比会漏掉 {name,role} 形态,
+     留下一条指向已删除用户的记录 —— 这个 bug 真发生过 */
   cookie = adminCookie;
-  await req('PUT', `/api/instances/${iid}/collaborators`, { users: original });
-  for (const u of Object.values(users)) await req('DELETE', `/api/users/${u}`);
+  r = await req('DELETE', `/api/users/${users.viewer}`);
+  check('collab roles: 删用户会摘掉其协作者身份',
+    r.json && r.json.ok && r.json.removedFromInstances >= 1, JSON.stringify(r.json));
   r = await req('GET', `/api/instances/${iid}/status`);
-  check('collab roles: 名单已还原',
-    JSON.stringify((r.json && r.json.collaborators) || []) === JSON.stringify(original),
-    JSON.stringify(r.json && r.json.collaborators));
+  check('collab roles: 名单里不留已删用户',
+    !(r.json.collaborators || []).some((c) => c.name === users.viewer),
+    JSON.stringify(r.json.collaborators));
+
+  // 收尾:还原原名单并删掉剩下的测试账号。
+  // 原名单里可能有已经不存在的用户(别处删号留下的残留),那种情况 PUT 会拒绝 ——
+  // 那不是本用例要验的东西,所以只断言"测试账号没留下",不做全等比较
+  await req('PUT', `/api/instances/${iid}/collaborators`, { users: original });
+  for (const u of [users.operator, users.manager]) await req('DELETE', `/api/users/${u}`);
+  r = await req('GET', `/api/instances/${iid}/status`);
+  const left = (r.json && r.json.collaborators) || [];
+  check('collab roles: 测试账号未残留',
+    !left.some((c) => Object.values(users).includes(c.name)), JSON.stringify(left));
 }
 
 /** 当前时间片的 TOTP 码;没配密钥就返回 undefined(登录接口会忽略它) */
