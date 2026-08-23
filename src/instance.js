@@ -35,6 +35,10 @@ function crashCfg() {
   };
 }
 
+/* 落盘日志单文件上限,超了滚一份 .1(总占用 = 2 倍)。
+   16 MB 约合几十万行,够覆盖一次完整的排查窗口 */
+const LOG_FILE_MAX_BYTES = Math.max(1, parseInt(process.env.MCSP_LOG_FILE_MB, 10) || 16) * 1048576;
+
 /* 每个实例最多留几次崩溃现场。每条含 200 行 tail(约 30 KB),20 条够回溯
    一整轮"改配置→崩→再改"的排查过程,又不会把 data/ 撑大 */
 const CRASH_HISTORY_MAX = 20;
@@ -199,7 +203,40 @@ class Instance {
     const entry = { time: ts(), level, message };
     this.logs.push(entry);
     if (this.logs.length > LOG_BUFFER_LINES) this.logs.shift();
+    this._appendLogFile(entry);
     bus.broadcast('log', { iid: this.id, ...entry });
+  }
+
+  /**
+   * 控制台日志落盘(功能 4)。
+   *
+   * 内存缓冲只有 5000 行且面板一重启就没 —— 偏偏"面板重启前那台服务器
+   * 到底怎么了"正是最常要查的。服务端自己的 logs/latest.log 也不够:
+   * 它不含面板自己打的那些 [MCSP] 行(自动重启、配额拦截、隧道状态),
+   * 而排查往往就卡在这些行上。
+   *
+   * 写在实例目录的 logs/mcsp-console.log,超过上限就滚一份 .1 ——
+   * 只留一代,再多是在替用户做长期归档的决定,那是备份该管的事。
+   * 用同步 append:日志量小(一行几十字节),但顺序不能乱。
+   */
+  _appendLogFile(entry) {
+    try {
+      const dir = path.join(this.dir, 'logs');
+      const file = path.join(dir, 'mcsp-console.log');
+      if (this._logBytes === undefined) {
+        fs.mkdirSync(dir, { recursive: true });
+        try { this._logBytes = fs.statSync(file).size; } catch { this._logBytes = 0; }
+      }
+      if (this._logBytes >= LOG_FILE_MAX_BYTES) {
+        try { fs.renameSync(file, `${file}.1`); } catch {}
+        this._logBytes = 0;
+      }
+      const line = `${entry.time} [${entry.level}] ${entry.message}\n`;
+      fs.appendFileSync(file, line);
+      this._logBytes += Buffer.byteLength(line);
+    } catch {
+      // 磁盘满/目录被删都不该让实例挂掉。这里不能再调 this.log —— 会无限递归
+    }
   }
 
   emitState() { bus.broadcast('state', this.snapshot()); }
@@ -495,7 +532,7 @@ class Instance {
         exitCode: this.lastExitCode ?? null,
         signal: this.lastSignal ?? null,
         report,
-        tail: this.logs.slice(-200).map((l) => `${l.ts} ${l.level} ${l.message}`),
+        tail: this.logs.slice(-200).map((l) => `${l.time} ${l.level} ${l.message}`),
       });
       this.crashes.length = Math.min(this.crashes.length, CRASH_HISTORY_MAX);
       this._saveCrashes();

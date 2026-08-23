@@ -78,6 +78,54 @@ function createBackup(inst, name) {
   });
 }
 
+/**
+ * 恢复前预览(功能 7)。
+ *
+ * 原来的恢复是一把梭:点下去直接 tar xzf 盖到实例目录上,盖之前谁也不知道
+ * 这个包里到底有什么。备份文件名只有时间戳,选错一个(比如换服务端类型前
+ * 那次自动备份)就把现在的世界盖没了,而且 tar 解压是覆盖式的,没法撤销。
+ *
+ * 所以先 tar tzf 列一遍:验证归档本身没坏(tar 能读完 = gzip 校验通过),
+ * 统计有没有世界/插件,并挑出会被覆盖的现有文件。只读,不动磁盘。
+ */
+function inspectBackup(inst, id) {
+  return new Promise((resolve) => {
+    const file = path.join(backupDir(inst), id);
+    if (!fs.existsSync(file) || !id.endsWith('.tar.gz')) return resolve({ ok: false, error: '备份不存在' });
+    // -tzf 只读目录表;大包也就几秒,比解压便宜得多
+    const tar = spawn('tar', ['tzf', file]);
+    let out = '';
+    let err = '';
+    tar.stdout.on('data', (d) => { out += d; });
+    tar.stderr.on('data', (d) => { err += d; });
+    tar.on('error', (e) => resolve({ ok: false, error: `无法执行 tar: ${e.message}` }));
+    tar.on('exit', (code) => {
+      if (code !== 0) {
+        // 这里失败基本等于包损坏 —— 正是要在覆盖之前发现的事
+        return resolve({ ok: false, error: `归档无法读取,可能已损坏 (tar 退出码 ${code})${err ? ': ' + err.trim().slice(0, 200) : ''}` });
+      }
+      const entries = out.split('\n').map((s) => s.replace(/^\.\//, '').trim()).filter(Boolean);
+      const files = entries.filter((e) => !e.endsWith('/'));
+      // 顶层条目:用户认得出"这个包里有 world / plugins / server.properties"
+      const top = [...new Set(entries.map((e) => e.split('/')[0]).filter(Boolean))].sort();
+      const worlds = top.filter((t) => entries.some((e) => e.startsWith(`${t}/level.dat`)));
+      // 会被盖掉的现有文件:只看顶层,逐个 stat 几万个文件不值当
+      const overwrite = top.filter((t) => {
+        try { return fs.existsSync(path.join(inst.dir, t)); } catch { return false; }
+      });
+      resolve({
+        ok: true,
+        fileCount: files.length,
+        topLevel: top.slice(0, 200),
+        worlds,
+        hasPlugins: top.includes('plugins') || top.includes('mods'),
+        hasProps: entries.some((e) => e === 'server.properties'),
+        overwrite,
+      });
+    });
+  });
+}
+
 function restoreBackup(inst, id) {
   return new Promise((resolve) => {
     const file = path.join(backupDir(inst), id);
@@ -92,4 +140,4 @@ function restoreBackup(inst, id) {
   });
 }
 
-module.exports = { backupDir, listBackups, createBackup, restoreBackup, pruneBackups };
+module.exports = { backupDir, listBackups, createBackup, restoreBackup, inspectBackup, pruneBackups };

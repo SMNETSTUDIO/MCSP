@@ -163,7 +163,7 @@ function switchView(view) {
     tasks: loadTasks,
     tunnel: loadTunnel,
     backups: loadBackups,
-    settings: loadProperties,
+    settings: () => { loadProperties(); loadRcon(); },
     users: loadUsers,
     system: loadSystem,
     account: loadAccount,
@@ -2058,6 +2058,7 @@ $('#tn-copy').addEventListener('click', async () => {
 /* ───────── backups ───────── */
 
 async function loadBackups() {
+  loadCrashes();
   const backups = await iapi('/backups');
   $('#backup-list').innerHTML = backups.length ? backups.map((b) => `
     <div class="backup-item">
@@ -2078,6 +2079,75 @@ $('#backup-create').addEventListener('click', async () => {
   if (r.ok) { toast('备份已创建'); loadBackups(); }
 });
 
+/* ───────── 崩溃现场 ───────── */
+
+async function loadCrashes() {
+  const r = await iapi('/crashes');
+  const rows = (r.crashes || []);
+  $('#crash-list').innerHTML = rows.length ? rows.map((c) => `
+    <div class="backup-item">
+      <div class="backup-ico">${ico('activity')}</div>
+      <div>
+        <div class="backup-name">${fmtAgo(c.at)} <span class="dim small">${new Date(c.at).toLocaleString()}</span></div>
+        <div class="backup-meta">
+          退出码 ${c.exitCode === null ? '—' : c.exitCode}${c.signal ? ` · 信号 ${escapeHtml(c.signal)}` : ''}
+          · 日志 ${c.tailLines} 行
+          ${c.report ? `· <span style="color:var(--blue)">含服务端崩溃报告</span>` : '· 无服务端报告'}
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <button class="icon-btn" data-crash="${c.index}">查看</button>
+    </div>`).join('') : '<div class="empty">还没有崩溃记录 —— 这是好事</div>';
+}
+
+$('#crash-list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-crash]');
+  if (!btn) return;
+  const r = await iapi(`/crashes/${btn.dataset.crash}`);
+  if (!r.ok) return toast(r.error, true);
+  const c = r.crash;
+  // 复用日志下载那套:崩溃现场动辄几百行,塞进 alert 没法看,直接给一个可另存的窗口
+  const head = `崩溃时间: ${new Date(c.at).toLocaleString()}\n`
+    + `退出码: ${c.exitCode === null ? '—' : c.exitCode}${c.signal ? `  信号: ${c.signal}` : ''}\n`
+    + `服务端崩溃报告: ${c.report || '无'}\n${'─'.repeat(60)}\n`;
+  const body = `【面板日志 tail】\n${(c.tail || []).join('\n')}\n\n`
+    + (c.reportText ? `${'─'.repeat(60)}\n【${c.report}】\n${c.reportText}` : '');
+  const w = window.open('', '_blank');
+  if (!w) return toast('浏览器拦截了弹窗,无法显示崩溃详情', true);
+  w.document.title = `崩溃现场 ${new Date(c.at).toLocaleString()}`;
+  const pre = w.document.createElement('pre');
+  pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font:12px/1.5 ui-monospace,monospace;padding:16px';
+  pre.textContent = head + body;      // textContent 而不是 innerHTML:日志里什么都可能有
+  w.document.body.style.cssText = 'margin:0;background:#14161a;color:#dfe3ea';
+  w.document.body.appendChild(pre);
+});
+
+$('#crash-clear').addEventListener('click', async () => {
+  if (!confirm('清空这个实例的所有崩溃记录?')) return;
+  await iapi('/crashes', { method: 'DELETE' });
+  toast('崩溃记录已清空');
+  loadCrashes();
+});
+
+/* ───────── RCON ───────── */
+
+async function loadRcon() {
+  const r = await iapi('/rcon');
+  const badge = $('#rcon-status');
+  badge.textContent = r.enabled ? '已启用' : '未启用';
+  badge.className = `task-badge ${r.enabled ? 'on' : 'off'}`;
+  $('#rcon-port').value = r.port || '——';
+  $('#rcon-pass').value = r.password || '——';
+  $('#rcon-enable').textContent = r.enabled ? '重新生成配置' : '一键开启';
+}
+
+$('#rcon-enable').addEventListener('click', async () => {
+  const r = await iapi('/rcon/enable', { method: 'POST' });
+  if (!r.ok) return toast(r.error, true);
+  toast(r.needRestart ? `RCON 已配置(端口 ${r.port}),重启实例后生效` : `RCON 已开启,端口 ${r.port}`);
+  loadRcon();
+});
+
 $('#backup-list').addEventListener('click', async (e) => {
   const btn = e.target.closest('[data-bact]');
   if (!btn) return;
@@ -2089,6 +2159,24 @@ $('#backup-list').addEventListener('click', async (e) => {
     a.click();
     toast('已开始下载');
   } else if (btn.dataset.bact === 'restore') {
+    // 恢复是覆盖式的、不可撤销,而备份名只有个时间戳 —— 先把包里有什么、
+    // 会盖掉什么摊开给用户看。顺带验一遍归档没坏(坏包在这一步就拦下)
+    const p = await iapi(`/backups/${btn.dataset.id}/inspect`);
+    if (!p.ok) return toast(p.error, true);
+    const lines = [
+      `备份 ${btn.dataset.id}`,
+      `包含 ${p.fileCount} 个文件` + (p.worlds.length ? `,世界:${p.worlds.join('、')}` : ',未发现世界存档'),
+      p.hasPlugins ? '含插件/模组目录' : '不含插件/模组目录',
+      p.hasProps ? '含 server.properties' : '不含 server.properties',
+      '',
+      p.overwrite.length
+        ? `以下现有内容会被覆盖(不可撤销):\n  ${p.overwrite.join('\n  ')}`
+        : '当前实例目录为空,不会覆盖任何东西。',
+      '',
+      '注意:恢复只做覆盖,不会删除备份里没有的文件。',
+      '确定恢复吗?',
+    ];
+    if (!confirm(lines.join('\n'))) return;
     const r = await iapi(`/backups/${btn.dataset.id}/restore`, { method: 'POST' });
     r.ok ? toast('备份恢复完成') : toast(r.error, true);
   } else {

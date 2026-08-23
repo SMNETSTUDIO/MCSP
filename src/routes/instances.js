@@ -18,7 +18,7 @@ const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
 const { detectServer, findServerRoot } = require('../detect');
 const { store: taskStore, saveTasks, taskScheduleText, runTask } = require('../tasks');
-const { backupDir, listBackups, createBackup, restoreBackup } = require('../backups');
+const { backupDir, listBackups, createBackup, restoreBackup, inspectBackup } = require('../backups');
 const { mcPing } = require('../mcping');
 const bus = require('../bus');
 
@@ -589,6 +589,10 @@ router.get('/:iid/rcon', (req, res) => {
     enabled: String(props['enable-rcon']).toLowerCase() === 'true',
     port: parseInt(props['rcon.port'], 10) || null,
     hasPassword: !!props['rcon.password'],
+    // 明文回传密码:能调这个接口的人(主人 / 协作者)本来就能在文件管理器里
+    // 直接打开 server.properties 看到它,藏在这里只会让面板里的 RCON 卡片
+    // 没法接外部客户端。审计中间件会把 password 字段脱敏,不会进日志。
+    password: props['rcon.password'] || null,
   });
 });
 
@@ -857,11 +861,54 @@ router.post('/:iid/backups', asyncHandler(async (req, res) => {
   res.json(r.ok ? { ok: true, backups: listBackups(req.inst) } : r);
 }));
 
+/* 恢复前预览:列归档内容、验完整性、指出哪些现有目录会被盖掉。只读 */
+router.get('/:iid/backups/:id/inspect', asyncHandler(async (req, res) => {
+  if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
+  res.json(await inspectBackup(req.inst, req.params.id));
+}));
+
 router.post('/:iid/backups/:id/restore', asyncHandler(async (req, res) => {
   if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
   if (req.inst.state !== 'stopped') return res.json({ ok: false, error: '请先停止实例再恢复备份' });
   res.json(await restoreBackup(req.inst, req.params.id));
 }));
+
+/* ── 崩溃现场(功能 3)── */
+
+router.get('/:iid/crashes', (req, res) => {
+  // 不回 tail,列表页只要摘要;整包 tail 有几百 KB
+  res.json({
+    ok: true,
+    crashes: (req.inst.crashes || []).map((c, i) => ({
+      index: i, at: c.at, exitCode: c.exitCode, signal: c.signal,
+      report: c.report, tailLines: (c.tail || []).length,
+    })),
+  });
+});
+
+/** 单次崩溃的完整现场:面板日志 tail + 服务端 crash-report 正文 */
+router.get('/:iid/crashes/:index', (req, res) => {
+  const c = (req.inst.crashes || [])[parseInt(req.params.index, 10)];
+  if (!c) return res.status(404).json({ ok: false, error: '崩溃记录不存在' });
+  let report = null;
+  if (c.report) {
+    try {
+      // 只认 basename:report 是自己写进去的,但它来自读目录,
+      // 万一有人在 crash-reports/ 里放了个带 ../ 的文件名也不能让它跑出去
+      const f = path.join(req.inst.dir, 'crash-reports', path.basename(c.report));
+      report = fs.readFileSync(f, 'utf8').slice(0, 512 * 1024);
+    } catch (err) {
+      report = `[无法读取 ${c.report}: ${err.message}]`;
+    }
+  }
+  res.json({ ok: true, crash: { ...c, reportText: report } });
+});
+
+router.delete('/:iid/crashes', (req, res) => {
+  req.inst.crashes = [];
+  req.inst._saveCrashes();
+  res.json({ ok: true });
+});
 
 /* 下载备份:直接流式回传 tar.gz(Express 处理 Range / ETag) */
 router.get('/:iid/backups/:id/download', (req, res) => {

@@ -497,6 +497,14 @@
           </div>
           <div id="backup-list" class="backup-list"></div>
         </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
+            <span>崩溃现场 <span class="dim small">异常退出时自动归档,面板重启后仍在</span></span>
+            <button class="icon-btn danger" id="crash-clear">清空</button>
+          </div>
+          <div id="crash-list"></div>
+        </div>
       </section>
 
       <!-- Settings -->
@@ -533,8 +541,9 @@
           </div>
           <div class="dim small" style="margin-top:14px">
             内存 512 ~ 65536 MB。以下改动均需重启实例生效。<br>
-            <b>崩溃自动重启</b>:异常退出 5 秒后拉起。手动 <code>stop</code> 或点「停止 / 强杀」不触发;
-            10 分钟内连崩 3 次就停手告警。<br>
+            <b>崩溃自动重启</b>:异常退出后延迟拉起。手动 <code>stop</code> 或点「停止 / 强杀」不触发;
+            短时间内连崩多次就停手告警 —— 延迟秒数与「几次 / 几分钟」在
+            <b>系统设置</b>里调(默认 5 秒、10 分钟内 3 次)。每次崩溃的现场都会归档到「备份」页。<br>
             <b>面板重启后自动恢复</b>:只恢复面板停止时正在运行的实例,你主动停掉的不会自己跑起来。<br>
             <b>额外 JVM 参数</b>接在默认值之后,同名 flag 以你写的为准。
             <code>-Xmx</code> 会被拒绝 —— 内存上限请用上面的字段,配额靠它落地;<code>-jar</code> / <code>-cp</code> 同样不允许。<br>
@@ -542,6 +551,24 @@
             把认证转发到皮肤站的 Yggdrasil API。首次保存会自动下载,服务端需保持 <code>online-mode=true</code>。
           </div>
         </div>
+        <div class="card glass" style="margin-bottom:18px">
+          <div class="card-title row-between">
+            <span>RCON <span class="task-badge off" id="rcon-status">未启用</span></span>
+            <button class="btn btn-blue" id="rcon-enable">一键开启</button>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row"><label>端口</label><input id="rcon-port" type="text" readonly /></div>
+            <div class="prop-row"><label>密码</label><input id="rcon-pass" type="text" readonly value="——" /></div>
+          </div>
+          <div class="dim small" style="margin-top:14px">
+            开启后控制台命令优先走 RCON:能拿到命令的<b>实际输出</b>(stdin 只能发不能收),
+            服务端主线程卡死时也是独立通道。任何一步不通都会自动回落 stdin,不会因此发不出命令。<br>
+            「一键开启」会在 <code>server.properties</code> 里写入 <code>enable-rcon=true</code>、
+            分配端口(默认 <code>server-port + 10</code>)并生成随机密码,<b>需要重启实例生效</b>。
+            密码只在面板内显示;RCON 端口不要暴露到公网。
+          </div>
+        </div>
+
         <div class="card glass" id="collab-card" style="margin-bottom:18px">
           <div class="card-title row-between">
             <span>协作者 <span class="dim small" id="collab-owner"></span></span>
