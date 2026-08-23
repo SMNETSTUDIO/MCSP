@@ -176,6 +176,7 @@
           <h2 class="card-title" style="margin:0">实例列表</h2>
           <button class="icon-btn" id="bulk-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>全部启动</button>
           <button class="icon-btn danger" id="bulk-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>全部停止</button>
+          <button class="icon-btn" id="inst-import"><svg class="ico" aria-hidden="true"><use href="#i-upload"/></svg>导入已有服务器</button>
           <button class="btn btn-blue" id="inst-create"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>新建实例</button>
         </div>
         <div class="inst-grid" id="inst-grid"></div>
@@ -846,6 +847,38 @@
       <div class="modal-actions">
         <button class="btn btn-ghost" id="ni-cancel">取消</button>
         <button class="btn btn-blue" id="ni-ok">下载并安装</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- import existing server modal -->
+  <div class="modal-mask" id="imp-modal" hidden>
+    <div class="card glass modal" role="dialog" aria-modal="true" aria-labelledby="imp-title">
+      <h2 class="card-title" id="imp-title">导入已有服务器 <span class="dim small">上传服务器目录的压缩包</span></h2>
+      <div class="field-col">
+        <input id="imp-name" type="text" placeholder="实例名称" />
+        <div class="row-2">
+          <select id="imp-icon">
+            <option>🧭</option><option>🌳</option><option>⛰️</option><option>🏗️</option>
+            <option>🎯</option><option>🏝️</option><option>🐉</option><option>⚔️</option>
+          </select>
+          <input id="imp-xmx" type="number" placeholder="内存上限 MB(默认 2048)" min="512" max="65536" step="256" />
+        </div>
+        <input type="file" id="imp-file" accept=".zip,.tar,.gz,.tgz,.bz2,.xz,.mrpack" />
+        <div class="dim small">
+          支持 zip / tar.gz / tar.bz2 / tar.xz。包里多套一层目录会自动展平。
+          服务端类型与 MC 版本从 jar 名、<code>version_history.json</code> 和日志里自动识别,
+          认不出来的可以导入后在设置页改。
+        </div>
+        <label class="eula-row">
+          <input type="checkbox" id="imp-eula" />
+          <span>我已阅读并同意 <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noopener">Minecraft EULA</a></span>
+        </label>
+        <div class="upload-list" id="imp-progress" hidden></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="imp-cancel">取消</button>
+        <button class="btn btn-blue" id="imp-ok">上传并导入</button>
       </div>
     </div>
   </div>

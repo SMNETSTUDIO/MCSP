@@ -16,6 +16,7 @@ const { Instance, sanitizeJvmArgs } = require('../instance');
 const { instances, saveRegistry, installInstance, reinstallInstance, cloneInstance } = require('../registry');
 const { ensureAuthlibInjector } = require('../authlib');
 const { TYPES } = require('../servertypes');
+const { detectServer, findServerRoot } = require('../detect');
 const { store: taskStore, saveTasks, taskScheduleText, runTask } = require('../tasks');
 const { backupDir, listBackups, createBackup, restoreBackup } = require('../backups');
 const { mcPing } = require('../mcping');
@@ -200,6 +201,108 @@ router.post('/', (req, res) => {
     gamemode: ['survival', 'creative', 'adventure', 'spectator'].includes(gamemode) ? gamemode : 'survival',
   });
 });
+
+/* ── 导入已有服务器 ──
+   分两步,因为要复用现成的上传接口(带进度条,大存档能传几个 G):
+   1) POST /import        建一个空壳实例,拿到 iid
+   2) 前端把压缩包传到 /:iid/files/upload
+   3) POST /:iid/import/finalize  解压 → 认出类型和版本 → 落元数据
+
+   空壳实例的 state 是 importing,前端据此不显示启动按钮 —— 半个服务器
+   被拉起来只会写坏存档。 */
+router.post('/import', (req, res) => {
+  const { name, icon, xmx } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ ok: false, error: '实例名称不能为空' });
+
+  const xmxVal = Math.min(65536, Math.max(512, parseInt(xmx, 10) || 2048));
+  const qerr = quotaError(req, xmxVal, true);
+  if (qerr) return res.status(403).json({ ok: false, error: qerr });
+
+  const id = crypto.randomUUID().slice(0, 8);
+  const inst = new Instance({
+    id,
+    name: String(name).trim().slice(0, 40),
+    owner: req.user.username,
+    type: 'vanilla',                 // 占位,finalize 时按探测结果改写
+    version: '',
+    jar: 'server.jar',
+    xmx: xmxVal,
+    icon: icon || '🧭',
+    createdAt: Date.now(),
+  });
+  fs.mkdirSync(inst.dir, { recursive: true });
+  inst.state = 'importing';
+  instances.set(id, inst);
+  disk.refresh(id);
+  saveRegistry();
+  bus.broadcast('instances', {});
+  inst.log('INFO', '[MCSP] 已建立空实例,等待上传服务器压缩包…');
+  res.json({ ok: true, instance: inst.snapshot() });
+});
+
+/** 解压上传上来的包并认出这是个什么服务端 { archive: '/xxx.zip' } */
+router.post('/:iid/import/finalize', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  if (inst.state !== 'importing') return res.status(409).json({ ok: false, error: '该实例不处于导入状态' });
+
+  const src = safePath(inst, (req.body || {}).archive);
+  if (!src) return res.status(400).json({ ok: false, error: '非法路径' });
+  if (!fs.existsSync(src)) return res.status(404).json({ ok: false, error: '压缩包不存在' });
+  if (!archiveKind(src)) return res.status(400).json({ ok: false, error: '不支持的压缩格式' });
+
+  if (archiveBusy.has(inst.id)) return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
+  archiveBusy.add(inst.id);
+  try {
+    const left = diskRemainingMB(req);
+    const cap = Math.min(MAX_EXTRACT_MB * 1048576, left === Infinity ? Infinity : left * 1048576);
+    inst.log('INFO', '[MCSP] 正在解压…');
+    const out = await extractArchive(src, inst.dir, cap);
+    await fsp.rm(src, { force: true });                 // 包本身不留在实例里白占配额
+    disk.bump(inst.id, out.bytes / 1048576);
+
+    /* 压缩包常常多套一层目录(server.zip 里是 server/…)。把真正的服务器根
+       整体提上来,否则实例目录里只有一个孤零零的子文件夹,启动脚本全找不到 */
+    const root = findServerRoot(inst.dir);
+    if (root !== inst.dir) {
+      inst.log('INFO', `[MCSP] 压缩包多套了一层目录,正在展平: ${path.basename(root)}/`);
+      for (const name of await fsp.readdir(root)) {
+        await fsp.rename(path.join(root, name), path.join(inst.dir, name)).catch(() => {});
+      }
+      await fsp.rm(root, { recursive: true, force: true }).catch(() => {});
+    }
+
+    const d = detectServer(inst.dir);
+    if (d.type) inst.type = d.type;
+    if (d.version) inst.version = d.version;
+    if (d.jar) inst.jar = d.jar;
+
+    /* 用户在导入表单里勾了 EULA 就补上 —— 从没跑过的服务端包没有 eula.txt,
+       否则启动时只会在日志深处留一行 "Failed to load eula.txt" */
+    if ((req.body || {}).eula) {
+      const eulaFile = path.join(inst.dir, 'eula.txt');
+      if (!fs.existsSync(eulaFile) || !/eula\s*=\s*true/i.test(fs.readFileSync(eulaFile, 'utf8'))) {
+        fs.writeFileSync(eulaFile, `# Accepted via MCSP by panel user on ${new Date().toISOString()}\neula=true\n`);
+        d.notes = d.notes.filter((n) => !n.includes('eula.txt'));
+        inst.log('INFO', '[MCSP] 已写入 eula=true');
+      }
+    }
+    inst.state = 'stopped';
+    inst.invalidatePropsCache();
+    saveRegistry();
+    bus.broadcast('instances', {});
+
+    const label = (TYPES[inst.type] || {}).label || inst.type;
+    inst.log('INFO', `[MCSP] 导入完成: ${label} ${inst.version || '(版本未知)'} · ${out.files} 个文件`);
+    for (const n of d.notes) inst.log('WARN', `[MCSP] ${n}`);
+    inst.emitState();
+    res.json({ ok: true, detected: d, instance: inst.snapshot() });
+  } catch (e) {
+    inst.log('ERROR', `[MCSP] 导入失败: ${e.message}`);
+    res.status(400).json({ ok: false, error: e.message });
+  } finally {
+    archiveBusy.delete(inst.id);
+  }
+}));
 
 /* 实例配置调整:内存上限 / 外置登录(运行中修改重启后生效;普通用户受内存配额约束) */
 router.patch('/:iid', asyncHandler(async (req, res) => {

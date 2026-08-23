@@ -29,6 +29,7 @@ const TUNNEL_STATE_TEXT = {
 const STATE_TEXT = {
   stopped: ['已停止', 'pill-gray'],
   installing: ['安装中…', 'pill-amber'],
+  importing: ['导入中…', 'pill-amber'],
   starting: ['启动中…', 'pill-amber'],
   running: ['运行中', 'pill-green'],
   stopping: ['停止中…', 'pill-amber'],
@@ -365,7 +366,7 @@ function renderInstGrid() {
           <div class="spacer"></div>
           ${i.state === 'stopped'
             ? `<button class="btn btn-green small-btn" data-power="start" data-iid="${i.id}">${ico('play')}启动</button>`
-            : i.state === 'installing' ? ''
+            : (i.state === 'installing' || i.state === 'importing') ? ''
             : `<button class="btn btn-red small-btn" data-power="stop" data-iid="${i.id}">${ico('stop')}停止</button>`}
           <button class="btn btn-ghost small-btn" data-open="${i.id}">管理</button>
         </div>
@@ -526,6 +527,75 @@ $('#ni-ok').addEventListener('click', async () => {
     toast('实例已创建,正在下载服务端…');
     loadOverview();
   } else toast(r.error, true);
+});
+
+/* ───────── 导入已有服务器 ─────────
+   三步:建空壳实例 → 传压缩包(复用带进度的上传) → finalize 解压并探测。
+   拆成三步是为了能白嫖现成的上传进度条 —— 存档动辄几个 G,没进度条没法用。 */
+
+$('#inst-import').addEventListener('click', () => {
+  $('#imp-progress').hidden = true;
+  $('#imp-progress').innerHTML = '';
+  $('#imp-modal').hidden = false;
+  $('#imp-name').focus();
+});
+$('#imp-cancel').addEventListener('click', () => { $('#imp-modal').hidden = true; });
+
+$('#imp-ok').addEventListener('click', async () => {
+  const name = $('#imp-name').value.trim();
+  const file = $('#imp-file').files[0];
+  if (!name) return toast('请填写实例名称', true);
+  if (!file) return toast('请选择服务器压缩包', true);
+
+  const btn = $('#imp-ok');
+  btn.disabled = true;
+  const bar = $('#imp-progress');
+  bar.hidden = false;
+  const setStep = (t, pct) => {
+    bar.innerHTML = `<div class="up-row"><span class="up-name">${escapeHtml(t)}</span>
+      <span class="up-bar"><i style="width:${pct}%"></i></span></div>`;
+  };
+
+  try {
+    setStep('正在创建实例…', 2);
+    const created = await api('/instances/import', {
+      method: 'POST',
+      body: { name, icon: $('#imp-icon').value, xmx: $('#imp-xmx').value },
+    });
+    if (!created.ok) throw new Error(created.error);
+    const iid = created.instance.id;
+
+    const up = await uploadOne(file, '/', true, (p) => setStep(`上传 ${file.name}`, Math.round(p * 92)), iid);
+    if (!up.ok) throw new Error(up.error);
+
+    // 解压大包要几十秒,进度拿不到,至少别让进度条卡在 92% 装死
+    setStep('正在解压并识别服务端…', 96);
+    const fin = await api(`/instances/${iid}/import/finalize`, {
+      method: 'POST',
+      body: { archive: '/' + file.name, eula: $('#imp-eula').checked },
+    });
+    if (!fin.ok) throw new Error(fin.error);
+
+    setStep('完成', 100);
+    const d = fin.detected || {};
+    toast(d.type
+      ? `已导入:${typeLabel(d.type)} ${d.version || '(版本未知)'}`
+      : '已导入,但未能识别服务端类型,请到设置页确认');
+    if (d.notes && d.notes.length) toast(d.notes[0], true);
+
+    $('#imp-modal').hidden = true;
+    $('#imp-name').value = ''; $('#imp-file').value = ''; $('#imp-eula').checked = false;
+    currentIid = iid;                       // 导完直接切过去,省得用户再找一遍
+    localStorage.setItem('mcsp_iid', iid);
+    await loadOverview();
+    await refreshInstanceContext();
+    switchView('dashboard');
+  } catch (e) {
+    toast(e.message || '导入失败', true);
+    bar.hidden = true;
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 /* ───────── dashboard & chart ───────── */
@@ -1631,11 +1701,12 @@ $('#fm-targz').addEventListener('click', () => fmArchive('tar.gz'));
 
 /* ── 上传:XHR(要 upload.progress,fetch 给不了)· body 就是文件本身 ── */
 
-function uploadOne(file, dir, overwrite, onProgress) {
+/* iid 可指定 —— 导入流程要传给刚建好的空壳实例,而不是当前选中的那个 */
+function uploadOne(file, dir, overwrite, onProgress, iid = null) {
   return new Promise((resolve) => {
     const q = `?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}${overwrite ? '&overwrite=1' : ''}`;
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/instances/${currentIid}/files/upload${q}`);
+    xhr.open('POST', `/api/instances/${iid || currentIid}/files/upload${q}`);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) onProgress(e.loaded / e.total);
