@@ -338,7 +338,7 @@ function renderInstGrid() {
     return `
       <div class="card glass inst-card" data-iid="${i.id}" data-state="${i.state}">
         <div class="inst-actions">
-          <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)" aria-label="克隆实例 ${escapeHtml(i.name)}">${ico('archive')}</button>
+          <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例" aria-label="克隆实例 ${escapeHtml(i.name)}">${ico('archive')}</button>
           <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例" aria-label="删除实例 ${escapeHtml(i.name)}">${ico('trash')}</button>
         </div>
         <div class="inst-head">
@@ -795,7 +795,7 @@ $('#view-players').addEventListener('click', async (e) => {
   const body = {};
   // 封禁/踢出可以带理由 —— 玩家在客户端上看到的就是这句话
   if (act === 'ban' || act === 'kick') {
-    const reason = prompt(`${act === 'ban' ? '封禁' : '踢出'} ${btn.dataset.name} 的理由(可留空,玩家会看到):`, '');
+    const reason = prompt(`${act === 'ban' ? '封禁' : '踢出'} ${btn.dataset.name} 的理由(玩家会看到):`, '');
     if (reason === null) return;
     body.reason = reason.trim();
   }
@@ -1672,15 +1672,17 @@ function renderTunnelComponents(comp) {
     else if (c.installing) action = `<span class="task-badge">下载中 ${c.progress}%</span>`;
     else if (c.installed) action = `<span class="task-badge">已安装</span>`;
     else if (me && me.role === 'admin') action = `<button class="btn btn-blue small-btn" data-comp="${name}">下载安装</button>`;
-    else action = '<span class="task-badge off">未安装(需管理员)</span>';
+    else action = '<span class="task-badge off">需管理员安装</span>';
     const [compIco, source] = COMPONENT_META[name];
-    const label = { playit: 'playit.gg', ssh: 'ssh(Pinggy / Serveo 使用)' }[name] || name;
+    // 名字归名字,用途归副标题 —— 别让一行同时干两件事
+    const label = { playit: 'playit.gg' }[name] || name;
+    const note = name === 'ssh' ? 'Pinggy / Serveo 需要' : '';
     return `
       <div class="backup-item">
         <div class="backup-ico">${compIco}</div>
         <div>
           <div class="backup-name">${label}</div>
-          <div class="backup-meta">${c.installed ? escapeHtml(c.version || '') : source + comp.arch}</div>
+          <div class="backup-meta">${[note, c.installed ? escapeHtml(c.version || '') : source + comp.arch].filter(Boolean).join(' · ')}</div>
         </div>
         <div class="spacer"></div>
         ${action}
@@ -2233,7 +2235,7 @@ $('#btn-passwd').addEventListener('click', async () => {
   try {
     const s = await fetch('/api/auth/oauth/status').then((r) => r.json());
     if (s.enabled) {
-      $('#oauth-bind-btn').textContent = `绑定 ${s.name} 账号(绑定后可第三方登录)`;
+      $('#oauth-bind-btn').textContent = `绑定 ${s.name} 账号`;
       $('#oauth-bind-row').hidden = false;
     }
   } catch {}

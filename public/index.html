@@ -232,7 +232,7 @@
       <section class="view" id="view-console">
         <div class="card glass console-card">
           <div class="console-toolbar">
-            <input id="log-q" type="search" placeholder="搜索日志(在整个缓冲区里找,不只是屏幕上这些)" autocomplete="off" />
+            <input id="log-q" type="search" placeholder="搜索全部日志" autocomplete="off" />
             <select id="log-level">
               <option value="">全部级别</option>
               <option value="ERROR">仅 ERROR</option>
@@ -292,7 +292,7 @@
             <span>新建世界 <span class="dim small">写入 level-name,启动实例后由服务端生成地形</span></span>
             <span>
               <input id="nw-name" type="text" placeholder="世界名,如 world2" style="width:150px" />
-              <input id="nw-seed" type="text" placeholder="种子(可留空)" style="width:150px" />
+              <input id="nw-seed" type="text" placeholder="种子" style="width:150px" />
               <button class="btn btn-blue small-btn" id="nw-go">新建并切换</button>
             </span>
           </div>
@@ -365,7 +365,7 @@
               <option value="start">启动实例</option>
               <option value="stop">停止实例</option>
             </select>
-            <input id="task-payload" type="text" placeholder="命令内容(仅执行命令时)" hidden />
+            <input id="task-payload" type="text" placeholder="命令内容" hidden />
             <select id="task-sched-type">
               <option value="interval">按间隔</option>
               <option value="daily">每天定时</option>
@@ -403,10 +403,10 @@
           </div>
           <div id="tn-bore" class="field-col" hidden>
             <div class="row-2">
-              <input id="tn-bore-server" type="text" placeholder="服务器(默认 bore.pub 免费公共)" />
+              <input id="tn-bore-server" type="text" placeholder="服务器(默认 bore.pub)" />
               <input id="tn-bore-rport" type="number" placeholder="远程端口(默认随机)" />
             </div>
-            <input id="tn-bore-secret" type="password" placeholder="secret(自建 bore server 时使用,可选)" autocomplete="off" />
+            <input id="tn-bore-secret" type="password" placeholder="secret(自建 server 用,可选)" autocomplete="off" />
             <div class="dim small">免费、免注册、纯 TCP。默认使用官方公共服务器 bore.pub,分配随机端口;也可自建 <code>bore server</code>。</div>
           </div>
           <div id="tn-pinggy" class="field-col" hidden>
@@ -429,7 +429,7 @@
             </div>
           </div>
           <div id="tn-ngrok" class="field-col" hidden>
-            <input id="tn-ngrok-token" type="password" placeholder="ngrok Authtoken(在 dashboard.ngrok.com 获取)" autocomplete="off" />
+            <input id="tn-ngrok-token" type="password" placeholder="ngrok Authtoken" autocomplete="off" />
             <div class="dim small">⚠️ ngrok 免费账户使用 TCP 隧道需先在
               <a href="https://dashboard.ngrok.com/settings#id-verification" target="_blank" rel="noopener" style="color:var(--blue)">ngrok 后台绑定一张银行卡</a>(仅验证身份,不会扣费)。
               每次启动分配随机地址,例如 0.tcp.jp.ngrok.io:14582。</div>
@@ -444,10 +444,10 @@
               <input id="tn-frpc-rport" type="number" placeholder="远程端口(默认同实例端口)" />
             </div>
             <div class="row-2">
-              <input id="tn-frpc-user" type="text" placeholder="用户名 user(可选,frps-panel 等)" autocomplete="off" />
+              <input id="tn-frpc-user" type="text" placeholder="用户名 user(可选)" autocomplete="off" />
               <input id="tn-frpc-meta" type="password" placeholder="用户密码 metadatas.token(可选)" autocomplete="off" />
             </div>
-            <div class="dim small">自建 frps 只需填地址 / 端口 / token;使用 <b>frps-panel</b> 等多用户鉴权插件的服务商,还需填用户名(user)与用户密码(metadatas.token)。</div>
+            <div class="dim small">自建 frps 只需填地址 / 端口 / token。用 <b>frps-panel</b> 等多用户鉴权插件的服务商,还要填下面两项。</div>
           </div>
           <div class="modal-actions" style="justify-content:flex-start;margin-top:16px">
             <button class="btn btn-blue" id="tn-save">保存配置</button>
@@ -515,18 +515,14 @@
             <textarea id="cfg-jvm" rows="3" spellcheck="false" placeholder="留空使用默认(-Xms512M -XX:+UseG1GC)。空格分隔,例如 -XX:+UseZGC -XX:+AlwaysPreTouch"></textarea>
           </div>
           <div class="dim small" style="margin-top:14px">
-            范围 512 ~ 65536 MB;运行中修改需重启实例后生效。<br>
-            崩溃自动重启:进程非正常退出(退出码非 0)时 5 秒后自动拉起;控制台里手动 <code>stop</code>
-            或点「停止 / 强杀」不会触发。10 分钟内连续异常退出超过 3 次就停手并在控制台告警,
-            手动启动后计数清零。<br>
-            面板重启后自动恢复:只恢复<b>面板停止时正在运行</b>的实例(多个实例每 5 秒拉起一个,避免同时启动抢磁盘);
-            你主动停掉的实例不会因为面板重启又自己跑起来。<br>
-            额外 JVM 参数接在默认值之后,同名 flag 以你写的为准(例如写 <code>-Xms4G</code> 会盖掉默认的 512M)。
-            <b>内存上限请用上面的字段</b>,这里写 <code>-Xmx</code> 会被拒绝 —— 配额就是靠它落地的。
-            <code>-jar</code> / <code>-cp</code> 同样不允许。改完需重启实例生效。<br>
-            外置登录通过 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
-            将玩家认证转发到皮肤站的 Yggdrasil API(如 LittleSkin)。启用后首次保存会自动下载 authlib-injector;
-            服务端需保持 <code>online-mode=true</code>,玩家需使用同一皮肤站的账号登录。
+            内存 512 ~ 65536 MB。以下改动均需重启实例生效。<br>
+            <b>崩溃自动重启</b>:异常退出 5 秒后拉起。手动 <code>stop</code> 或点「停止 / 强杀」不触发;
+            10 分钟内连崩 3 次就停手告警。<br>
+            <b>面板重启后自动恢复</b>:只恢复面板停止时正在运行的实例,你主动停掉的不会自己跑起来。<br>
+            <b>额外 JVM 参数</b>接在默认值之后,同名 flag 以你写的为准。
+            <code>-Xmx</code> 会被拒绝 —— 内存上限请用上面的字段,配额靠它落地;<code>-jar</code> / <code>-cp</code> 同样不允许。<br>
+            <b>外置登录</b>经 <a href="https://manual.littlesk.in/yggdrasil/authlib-injector" target="_blank" rel="noopener" style="color:var(--blue)">authlib-injector</a>
+            把认证转发到皮肤站的 Yggdrasil API。首次保存会自动下载,服务端需保持 <code>online-mode=true</code>。
           </div>
         </div>
         <div class="card glass" id="collab-card" style="margin-bottom:18px">
@@ -539,7 +535,7 @@
           </div>
           <div class="tag-list" id="collab-list"></div>
           <div class="dim small" style="margin-top:12px">
-            协作者可以像主人一样操作这个实例(控制台、文件、备份、插件…),但<b>不能删除实例</b>,
+            协作者能像主人一样操作这个实例,但<b>不能删除实例</b>,
             也<b>不能改这份名单</b>。资源配额始终算在主人头上。
           </div>
         </div>
@@ -573,7 +569,7 @@
             <div class="prop-row"><label>服务端类型</label><select id="ri-type"><option value="">加载中…</option></select></div>
             <div class="prop-row"><label>目标版本</label><select id="ri-version"><option value="">加载中…</option></select></div>
             <div class="prop-row">
-              <label>重装前自动备份(强烈建议)</label>
+              <label>重装前自动备份</label>
               <label class="switch prop-switch"><input type="checkbox" id="ri-backup" checked><span class="slider"></span></label>
             </div>
           </div>
@@ -605,7 +601,7 @@
               <button class="icon-btn danger" id="fa-off" hidden>关闭</button>
             </span>
           </div>
-          <div id="fa-body" class="dim small">用手机上的认证器 App(如 Google Authenticator、Authy、1Password)生成动态验证码。</div>
+          <div id="fa-body" class="dim small">用认证器 App 生成动态验证码,如 Google Authenticator、Authy、1Password。</div>
         </div>
 
         <div class="card glass" style="margin-bottom:18px">
@@ -648,7 +644,7 @@
             <input id="user-lim-cpu" type="number" min="1" placeholder="CPU 核数(默认 2)" />
             <input id="user-lim-disk" type="number" min="0" step="1024" placeholder="磁盘配额 MB(默认 20480,0=不限)" />
           </div>
-          <div class="dim small" style="margin-top:10px">普通用户的实例互相隔离(只有管理员能看到全部);内存为其全部实例 -Xmx 之和的上限,CPU 为启动时绑定的核数(taskset),磁盘为其全部实例目录 + 备份的体积上限(上传/解压/打包/备份时校验)。管理员不受限。</div>
+          <div class="dim small" style="margin-top:10px">普通用户只能看到自己的实例,管理员不受配额限制。内存按全部实例 -Xmx 之和计,CPU 在启动时绑核,磁盘含实例目录与备份。</div>
         </div>
         <div class="card glass" style="margin-top:18px">
           <h2 class="card-title">用户列表 <span class="dim small" id="user-count"></span></h2>
@@ -670,14 +666,14 @@
           </div>
           <div class="props-grid">
             <div class="prop-row">
-              <label>开放注册(OAuth 未绑定身份可自动建号)</label>
+              <label>开放注册</label>
               <label class="switch prop-switch"><input type="checkbox" id="sys-reg"><span class="slider"></span></label>
             </div>
             <div class="prop-row"><label>备份保留份数(每实例,0 = 不限)</label><input id="sys-bk-count" type="number" min="0" max="3650" /></div>
             <div class="prop-row"><label>备份保留天数(0 = 不限)</label><input id="sys-bk-days" type="number" min="0" max="3650" /></div>
           </div>
           <div class="prop-row" style="margin-top:14px">
-            <label>公告(所有用户登录后顶部可见;留空则不显示)</label>
+            <label>公告<span class="dim small">留空不显示</span></label>
             <textarea id="sys-announcement" rows="3" maxlength="500" placeholder="例如:本周六 22:00 停机维护,预计 30 分钟"></textarea>
           </div>
           <div class="dim small" style="margin-top:14px">
@@ -693,7 +689,7 @@
           <div class="card-title row-between">
             <span>操作审计 <span class="dim small">所有写操作,含失败尝试</span></span>
             <span>
-              <input id="au-q" type="search" placeholder="筛选(用户/动作/路径)" style="width:200px" />
+              <input id="au-q" type="search" placeholder="筛选用户 / 动作 / 路径" style="width:200px" />
               <button class="icon-btn" id="au-refresh">刷新</button>
             </span>
           </div>
@@ -734,7 +730,7 @@
             <button class="btn btn-blue" id="og-save">保存</button>
           </div>
           <div class="props-grid">
-            <div class="prop-row"><label>提供商名称(登录按钮显示)</label><input id="og-name" placeholder="如 Linux DO" /></div>
+            <div class="prop-row"><label>提供商名称</label><input id="og-name" placeholder="如 Linux DO" /></div>
             <div class="prop-row"><label>Client ID</label><input id="og-cid" autocomplete="off" /></div>
             <div class="prop-row"><label>Client Secret</label><input id="og-csec" type="password" autocomplete="new-password" /></div>
             <div class="prop-row"><label>Scope</label><input id="og-scope" placeholder="read" /></div>
@@ -767,11 +763,11 @@
       <div class="field-col">
         <label class="dim small">实例数上限</label>
         <input id="lim-inst" type="number" min="1" max="12" />
-        <label class="dim small">内存配额(全部实例 -Xmx 之和,MB)</label>
+        <label class="dim small">内存配额 MB</label>
         <input id="lim-mem" type="number" min="512" max="65536" step="256" />
-        <label class="dim small">CPU 核数(实例启动时绑定,重启生效)</label>
+        <label class="dim small">CPU 核数</label>
         <input id="lim-cpu" type="number" min="1" />
-        <label class="dim small">磁盘配额(实例目录 + 备份,MB;0 = 不限)</label>
+        <label class="dim small">磁盘配额 MB(0 = 不限)</label>
         <input id="lim-disk" type="number" min="0" step="1024" />
       </div>
       <div class="modal-actions">
