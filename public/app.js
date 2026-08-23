@@ -51,6 +51,10 @@ let cmdHistory = [];
 let cmdHistoryIdx = -1;
 let fmPath = '/';
 let fmOpenFile = null;
+/* 剪贴板只放内存:刷新后指向已删文件的陈旧剪贴板毫无意义。
+   存 dir 是因为 fmSelected() 拿到的是名字不是路径,跨目录粘贴时需要源目录 */
+let fmClip = null;               // { op:'cut'|'copy', iid, dir, names[] }
+let fmLastIndex = null;          // Shift 范围选的锚点,每次换目录重置
 
 /* ───────── helpers ───────── */
 
@@ -202,6 +206,7 @@ async function refreshInstanceContext() {
   $('#dash-log').innerHTML = '';
   for (const entry of logs) appendLog(entry);
   fmPath = '/'; fmOpenFile = null; $('#fm-editor').hidden = true;
+  fmClip = null; fmLastIndex = null; fmSyncClip();   // 剪贴板里的路径属于上一个实例,作废
   $('#log-q').value = ''; $('#log-level').value = '';
   logFilterOn = false; $('#log-clear').hidden = true; $('#log-count').textContent = '';
   applyTopbar();
@@ -1020,11 +1025,40 @@ function fmSelected() {
 
 function fmSyncSelection() {
   if (fmWorking) return;
+  const boxes = $$('#fm-list [data-sel]');
   const n = fmSelected().length;
   $('#fm-selinfo').hidden = !n;
   $('#fm-selinfo').textContent = `已选 ${n} 项`;
-  $('#fm-zip').hidden = !n;
-  $('#fm-targz').hidden = !n;
+  for (const id of ['#fm-zip', '#fm-targz', '#fm-cut', '#fm-copy', '#fm-del']) $(id).hidden = !n;
+
+  // 全选框三态:全中 / 全不中 / 部分
+  const all = $('#fm-selall');
+  if (all) {
+    all.checked = boxes.length > 0 && n === boxes.length;
+    all.indeterminate = n > 0 && n < boxes.length;
+    all.disabled = !boxes.length;
+  }
+}
+
+/** 剪贴板栏。只要剪贴板非空就显示,和当前有没有选中无关 */
+function fmSyncClip() {
+  const bar = $('#fm-clipbar');
+  bar.hidden = !fmClip;
+  if (!fmClip) return;
+  $('#fm-clipinfo').innerHTML =
+    `已${fmClip.op === 'cut' ? '剪切' : '复制'} <b>${fmClip.names.length}</b> 项 · 来自 ${escapeHtml(fmClip.dir)}`;
+  // 粘贴到源目录:剪切没意义(等于原地不动),复制是"再来一份"所以允许
+  $('#fm-paste').disabled = fmClip.op === 'cut' && fmClip.dir === fmPath;
+}
+
+function fmClearClip() { fmClip = null; fmSyncClip(); renderCutMarks(); }
+
+/** 被剪切的项在源目录里淡显,让用户知道它们正"待搬走" */
+function renderCutMarks() {
+  const cut = fmClip && fmClip.op === 'cut' && fmClip.dir === fmPath ? new Set(fmClip.names) : null;
+  $$('#fm-list .file-row').forEach((row) => {
+    row.classList.toggle('cut', !!cut && cut.has(row.dataset.name));
+  });
 }
 
 function fmBusy(on, text) {
@@ -1079,7 +1113,10 @@ async function loadFiles(p) {
       </div>`;
   }).join('');
   $('#fm-list').innerHTML = rows || '<div class="empty">空目录</div>';
-  fmSyncSelection();                       // 换目录后勾选作废,顺手把工具栏收回去
+  fmLastIndex = null;                      // 换目录后 Shift 锚点作废
+  fmSyncSelection();                       // 勾选也作废,顺手把工具栏收回去
+  fmSyncClip();                            // 剪贴板跨目录存活,但"能不能粘"要重算
+  renderCutMarks();
 }
 
 $('#fm-crumb').addEventListener('click', (e) => {
@@ -1092,9 +1129,25 @@ $('#fm-list').addEventListener('change', (e) => {
 });
 
 $('#fm-list').addEventListener('click', async (e) => {
-  // 勾选框自己处理选中,别顺带把文件也打开了
-  if (e.target.closest('.f-check')) return;
-  if (fmWorking) return toast('压缩任务进行中,请稍候', true);
+  // 勾选框自己处理选中,别顺带把文件也打开了。
+  // Shift 范围选必须折在这里 —— 另加一个监听会被下面这个 return 吞掉。
+  const cell = e.target.closest('.f-check');
+  if (cell) {
+    const box = cell.querySelector('[data-sel]');
+    if (!box) return;
+    const boxes = $$('#fm-list [data-sel]');
+    const idx = boxes.indexOf(box);
+    // change 事件拿不到 shiftKey,所以锚点得在 click 阶段记
+    if (e.shiftKey && fmLastIndex !== null && fmLastIndex !== idx) {
+      const [a, b] = idx < fmLastIndex ? [idx, fmLastIndex] : [fmLastIndex, idx];
+      // 和资源管理器一致:shift 是"把这一段刷成和我一样",不是简单全选
+      for (let i = a; i <= b; i++) boxes[i].checked = box.checked;
+      fmSyncSelection();
+    }
+    fmLastIndex = idx;
+    return;
+  }
+  if (fmWorking) return toast('文件操作进行中,请稍候', true);
 
   const ext = e.target.closest('[data-fext]');
   if (ext) return fmExtract(ext.dataset.fext, ext.dataset.fname);
@@ -1201,6 +1254,98 @@ async function fmArchive(format) {
   toast(`已生成 ${r.name}(${r.files} 个文件,${fmtSize(r.size)})`);
   loadFiles(fmPath);
 }
+
+/* ── 批量操作与剪贴板 ── */
+
+$('#fm-selall').addEventListener('change', (e) => {
+  $$('#fm-list [data-sel]').forEach((b) => { b.checked = e.target.checked; });
+  fmLastIndex = null;
+  fmSyncSelection();
+});
+
+function fmPutClip(op) {
+  const names = fmSelected();
+  if (!names.length) return;
+  fmClip = { op, iid: currentIid, dir: fmPath, names };
+  fmSyncClip();
+  renderCutMarks();
+  toast(`已${op === 'cut' ? '剪切' : '复制'} ${names.length} 项,到目标目录点「粘贴到此处」`);
+}
+
+$('#fm-cut').addEventListener('click', () => fmPutClip('cut'));
+$('#fm-copy').addEventListener('click', () => fmPutClip('copy'));
+$('#fm-clipclear').addEventListener('click', fmClearClip);
+
+$('#fm-paste').addEventListener('click', fmPaste);
+async function fmPaste() {
+  if (!fmClip) return;
+  // 换实例后剪贴板里的路径已经不属于当前实例了
+  if (fmClip.iid !== currentIid) return toast('剪贴板来自其它实例,已失效', true), fmClearClip();
+  if (fmClip.op === 'cut' && fmClip.dir === fmPath) return toast('已经在这个目录里了', true);
+
+  fmBusy(true, fmClip.op === 'cut' ? '正在移动…' : '正在复制…');
+  const r = await iapi('/files/transfer', {
+    method: 'POST',
+    body: { op: fmClip.op === 'cut' ? 'move' : 'copy', from: fmClip.dir, names: fmClip.names, to: fmPath },
+  });
+  fmBusy(false);
+
+  if (r.done && r.done.length) {
+    // 有被自动改名的就说清楚,免得用户以为没粘上
+    const renamed = r.done.filter((d) => d.as !== d.name);
+    toast(`已${fmClip.op === 'cut' ? '移动' : '复制'} ${r.done.length} 项`
+      + (renamed.length ? `,${renamed.length} 项因重名改为「${renamed[0].as}」等` : ''));
+  }
+  if (r.failed && r.failed.length) {
+    toast(`${r.failed.length} 项失败:${r.failed.slice(0, 2).map((f) => `${f.name}(${f.error})`).join('、')}`, true);
+  } else if (!r.done) {
+    return toast(r.error || '操作失败', true);
+  }
+  if (fmClip.op === 'cut') fmClearClip();       // 剪切是一次性的,复制可以连续粘
+  loadFiles(fmPath);
+}
+
+$('#fm-del').addEventListener('click', async () => {
+  const names = fmSelected();
+  if (!names.length) return;
+  const preview = names.slice(0, 3).join('、') + (names.length > 3 ? ` 等 ${names.length} 项` : '');
+  if (!confirm(`删除 ${preview}?目录会连同里面的内容一起删掉,不可恢复。`)) return;
+
+  fmBusy(true, '正在删除…');
+  const r = await iapi('/files/batch', { method: 'DELETE', body: { dir: fmPath, names } });
+  fmBusy(false);
+  if (r.done && r.done.length) toast(`已删除 ${r.done.length} 项`);
+  if (r.failed && r.failed.length) toast(`${r.failed.length} 项删除失败`, true);
+  else if (!r.done) return toast(r.error || '删除失败', true);
+  loadFiles(fmPath);
+});
+
+/* 键盘快捷键。守卫要齐:视图不对、弹窗开着、编辑器开着(会抢 Ctrl+A)、
+   焦点在输入控件里、正在跑文件操作 —— 任一命中都不接管按键。 */
+document.addEventListener('keydown', (e) => {
+  if (currentView !== 'files') return;
+  if ($$('.modal-mask').some((m) => !m.hidden)) return;     // 让 modalBehaviour 处理
+  if (!$('#fm-editor').hidden) return;
+  // 守卫自己不能抛 —— e.target 未必是 Element(比如事件直接派发到 document),
+  // 那样 .matches 不存在,一个 TypeError 就把整个快捷键处理器打死了
+  const t = e.target;
+  if (t instanceof Element && (t.matches('input, textarea, select') || t.isContentEditable)) return;
+  if (fmWorking) return;
+
+  const mod = e.metaKey || e.ctrlKey;                        // macOS 用 Cmd
+  const k = e.key.toLowerCase();
+  if (mod && k === 'a') { e.preventDefault(); $('#fm-selall').checked = true; $('#fm-selall').dispatchEvent(new Event('change')); return; }
+  if (mod && k === 'x') { e.preventDefault(); return fmPutClip('cut'); }
+  if (mod && k === 'c') { e.preventDefault(); return fmPutClip('copy'); }
+  if (mod && k === 'v') { e.preventDefault(); return fmPaste(); }
+  if (e.key === 'Delete' && fmSelected().length) { e.preventDefault(); return $('#fm-del').click(); }
+  if (e.key === 'Escape') {
+    $$('#fm-list [data-sel]').forEach((b) => { b.checked = false; });
+    fmLastIndex = null;
+    fmSyncSelection();
+    fmClearClip();
+  }
+});
 
 /* ── 账号安全:2FA / Token / 会话 ── */
 

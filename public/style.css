@@ -927,6 +927,22 @@ body {
 .file-row .f-size { font-variant-numeric: tabular-nums; }
 .file-row .f-actions { display: flex; gap: 6px; justify-self: end; }
 .file-row .f-actions .icon-btn { padding: 5px 8px; }
+/* 待搬走的项淡显,让用户知道它们已在剪贴板里 */
+.file-row.cut { opacity: 0.5; }
+
+/* 剪贴板栏 */
+.fm-clipbar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(var(--acc-rgb), 0.12);
+  border: 1px solid rgba(var(--acc-rgb), 0.28);
+  font-size: 12.5px;
+}
+.fm-clipbar .spacer { flex: 1; }
+.fm-clipbar .ico { color: rgb(var(--acc-rgb)); }
+.fm-clipbar b { font-variant-numeric: tabular-nums; }
+
 /* 表头:让那几列读起来是表格,而不是飘着的三段文字 */
 .file-head {
   padding-bottom: 6px; margin-bottom: 2px;
@@ -1436,7 +1452,9 @@ body {
   .file-row { grid-template-columns: 20px 24px minmax(0, 1fr) auto; }
   .file-row .f-time, .file-row .f-spacer { display: none; }
   .file-row .f-actions { grid-column: 1 / -1; flex-wrap: wrap; justify-self: start; }
-  .file-head { display: none; }
+  /* 表头的列标题窄屏放不下,但全选框住在里面,不能整行隐掉 */
+  .file-head .f-size, .file-head .f-name { visibility: hidden; }
+  .file-head .f-actions { display: none; }
 }
 
 /* ── 控制台工具栏(搜索 / 级别筛选 / 下载)── */

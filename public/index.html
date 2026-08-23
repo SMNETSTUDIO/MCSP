@@ -72,6 +72,10 @@
     <symbol id="i-folder-plus" viewBox="0 0 16 16"><path d="M2 13V3h4l2 2h6v8zM8 8v3M6.5 9.5h3"/></symbol>
     <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4h11M6 4V2h4v2M4 4v10h8V4M6.5 6.5v5M9.5 6.5v5"/></symbol>
     <symbol id="i-pencil" viewBox="0 0 16 16"><path d="M11 2l3 3-8 8H3v-3zM9.5 3.5l3 3"/></symbol>
+    <symbol id="i-cut" viewBox="0 0 16 16"><path d="M4 2l8 9M12 2l-8 9M3 12.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0M10 12.5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 16 16"><path d="M5 5h8v9H5zM3 11V2h8v2"/></symbol>
+    <symbol id="i-clipboard" viewBox="0 0 16 16"><path d="M6 2h4v2H6zM4 3H3v11h10V3h-1"/></symbol>
+    <symbol id="i-paste" viewBox="0 0 16 16"><path d="M6 2h4v2H6zM4 3H3v11h5M7 8h6v6H7z"/></symbol>
   </defs></svg>
 
   <div class="layout">
@@ -325,18 +329,30 @@
             <div class="breadcrumb" id="fm-crumb"></div>
             <div class="spacer"></div>
             <span class="dim small" id="fm-selinfo" hidden></span>
+            <button class="icon-btn" id="fm-cut" hidden><svg class="ico" aria-hidden="true"><use href="#i-cut"/></svg>剪切</button>
+            <button class="icon-btn" id="fm-copy" hidden><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>复制</button>
             <button class="icon-btn" id="fm-zip" hidden><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>打包 zip</button>
             <button class="icon-btn" id="fm-targz" hidden><svg class="ico" aria-hidden="true"><use href="#i-archive"/></svg>打包 tar.gz</button>
+            <button class="icon-btn danger" id="fm-del" hidden><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>删除</button>
             <button class="icon-btn" id="fm-upload"><svg class="ico" aria-hidden="true"><use href="#i-upload"/></svg>上传</button>
             <button class="icon-btn" id="fm-newfile"><svg class="ico" aria-hidden="true"><use href="#i-file"/></svg>文件</button>
             <button class="icon-btn" id="fm-newdir"><svg class="ico" aria-hidden="true"><use href="#i-folder-plus"/></svg>文件夹</button>
             <input type="file" id="fm-file-input" multiple hidden />
           </div>
           <div class="upload-list" id="fm-uploads" hidden></div>
-          <div class="file-row file-head" aria-hidden="true">
-            <div class="f-check"></div><div class="f-ico"></div>
+          <!-- 剪贴板栏:只要剪贴板非空就显示,和当前是否有选中无关 -->
+          <div class="fm-clipbar" id="fm-clipbar" hidden>
+            <svg class="ico" aria-hidden="true"><use href="#i-clipboard"/></svg>
+            <span id="fm-clipinfo"></span>
+            <div class="spacer"></div>
+            <button class="icon-btn" id="fm-paste"><svg class="ico" aria-hidden="true"><use href="#i-paste"/></svg>粘贴到此处</button>
+            <button class="icon-btn" id="fm-clipclear">取消</button>
+          </div>
+          <div class="file-row file-head">
+            <div class="f-check"><input type="checkbox" id="fm-selall" aria-label="全选当前目录"></div>
+            <div class="f-ico" aria-hidden="true"></div>
             <div class="f-name">名称</div><div class="f-size">大小</div><div class="f-time">修改时间</div>
-            <div class="f-spacer"></div><div class="f-actions"></div>
+            <div class="f-spacer"></div><div class="f-actions" aria-hidden="true"></div>
           </div>
           <div class="file-table" id="fm-list"></div>
           <div class="fm-dropmask" id="fm-dropmask" hidden>松开即可上传到当前目录</div>
