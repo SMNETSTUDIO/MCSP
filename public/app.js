@@ -106,6 +106,11 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+/* 引用 index.html 里的图标精灵表。名字见那份 <defs> */
+function ico(name, cls = 'ico') {
+  return `<svg class="${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
+}
+
 /* ───────── navigation ───────── */
 
 function switchView(view) {
@@ -275,7 +280,7 @@ function javaCellHtml(host) {
   }
   if (missing && me && me.role === 'admin') {
     text += ` <button class="btn btn-blue small-btn" id="java-install-btn"
-      style="margin-left:8px;padding:3px 10px;font-size:12px">⬇ ${have.length || host.javaVersion ? '补齐全部版本' : '一键安装'}</button>`;
+      style="margin-left:8px;padding:3px 10px;font-size:12px">${ico('download')}${have.length || host.javaVersion ? '补齐全部版本' : '一键安装'}</button>`;
   }
   return text;
 }
@@ -332,8 +337,8 @@ function renderInstGrid() {
     const [txt, pillCls] = STATE_TEXT[i.state] || STATE_TEXT.stopped;
     return `
       <div class="card glass inst-card" data-iid="${i.id}" data-state="${i.state}">
-        <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)">⧉</button>
-        <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例">✕</button>
+        <button class="icon-btn inst-clone" data-clone="${i.id}" title="克隆实例(复制世界与配置)" aria-label="克隆实例">${ico('archive')}</button>
+        <button class="icon-btn danger inst-del" data-del="${i.id}" title="删除实例" aria-label="删除实例">${ico('trash')}</button>
         <div class="inst-head">
           <div class="inst-ico">${i.icon}</div>
           <div>
@@ -347,14 +352,14 @@ function renderInstGrid() {
           <span>内存 <b>${(i.metrics.ram / 1024).toFixed(1)}G</b></span>
         </div>
         ${i.tunnel && i.tunnel.state === 'running' && i.tunnel.addr
-          ? `<div class="inst-stats" style="margin-top:-8px"><span>⇄ <b>${escapeHtml(i.tunnel.addr)}</b></span></div>` : ''}
+          ? `<div class="inst-stats" style="margin-top:-8px"><span>${ico('tunnel')} <b>${escapeHtml(i.tunnel.addr)}</b></span></div>` : ''}
         <div class="inst-foot">
           <span class="pill ${pillCls}">${i.state === 'installing' ? `安装中 ${i.installProgress || 0}%` : txt}</span>
           <div class="spacer"></div>
           ${i.state === 'stopped'
-            ? `<button class="btn btn-green small-btn" data-power="start" data-iid="${i.id}">▶ 启动</button>`
+            ? `<button class="btn btn-green small-btn" data-power="start" data-iid="${i.id}">${ico('play')}启动</button>`
             : i.state === 'installing' ? ''
-            : `<button class="btn btn-red small-btn" data-power="stop" data-iid="${i.id}">■ 停止</button>`}
+            : `<button class="btn btn-red small-btn" data-power="stop" data-iid="${i.id}">${ico('stop')}停止</button>`}
           <button class="btn btn-ghost small-btn" data-open="${i.id}">管理</button>
         </div>
       </div>`;
@@ -891,7 +896,7 @@ async function loadPlugins() {
   // 免得 Forge 用户在写着「插件」的页面上找模组
   $('#view-title').textContent = noun;
   const navBtn = $('.nav-item[data-view="plugins"]');
-  if (navBtn) navBtn.innerHTML = `<span class="nav-ico">✦</span>${noun}`;
+  if (navBtn) navBtn.lastChild.textContent = noun;   // 只换文字,别把图标一起冲掉
 
   $('#pl-search-card').hidden = !d.dir;
   if (!d.dir) {
@@ -932,7 +937,7 @@ async function pluginSearch() {
   if (!d.hits.length) { $('#pl-results').innerHTML = '<div class="dim small" style="padding:10px 4px">没有找到能装在当前服务端上的结果</div>'; return; }
   $('#pl-results').innerHTML = d.hits.map((h) => `
     <div class="mr-row">
-      <div class="mr-icon">${h.icon ? `<img src="${escapeHtml(h.icon)}" alt="" loading="lazy">` : '✦'}</div>
+      <div class="mr-icon">${h.icon ? `<img src="${escapeHtml(h.icon)}" alt="" loading="lazy">` : ico('plug')}</div>
       <div class="mr-body">
         <div class="mr-title"><a href="${escapeHtml(h.url)}" target="_blank" rel="noopener">${escapeHtml(h.title)}</a>
           <span class="dim small">by ${escapeHtml(h.author)} · ${(h.downloads / 1000).toFixed(0)}k 下载</span></div>
@@ -1049,22 +1054,25 @@ async function loadFiles(p) {
 
   const rows = d.entries.map((e2) => {
     const full = (p === '/' ? '' : p) + '/' + e2.name;
-    const ico = e2.type === 'dir' ? '📁' : e2.archive ? '🗜' : e2.binary ? '📦' : '📄';
+    const fico = ico(e2.type === 'dir' ? 'folder' : e2.archive ? 'archive' : 'file', 'ico fm-ico');
     const clickable = e2.type === 'dir' || !e2.binary;
     const name = escapeHtml(e2.name);
     return `
       <div class="file-row ${clickable ? 'clickable' : ''}" data-type="${e2.type}" data-binary="${e2.binary}" data-name="${name}" data-path="${escapeHtml(full)}">
         <div class="f-check"><input type="checkbox" data-sel="${name}" title="选中以打包"></div>
-        <div class="f-ico">${ico}</div>
+        <div class="f-ico">${fico}</div>
         <div class="f-name">${name}</div>
         <div class="f-size">${e2.type === 'dir' ? '—' : fmtSize(e2.size)}</div>
         <div class="f-time">${fmtAgo(e2.mtime)}</div>
+        <div class="f-spacer"></div>
         <div class="f-actions">
           ${e2.archive ? `<button class="icon-btn gold" data-fext="${escapeHtml(full)}" data-fname="${name}">解压</button>` : ''}
           <button class="icon-btn" data-fdl="${escapeHtml(full)}" data-fdir="${e2.type === 'dir'}"
-            ${e2.type === 'dir' ? 'title="打包成 tar.gz 下载"' : ''}>下载</button>
-          <button class="icon-btn" data-fren="${escapeHtml(full)}" data-fname="${name}">改名</button>
-          <button class="icon-btn danger" data-fdel="${escapeHtml(full)}">删除</button>
+            title="${e2.type === 'dir' ? '打包成 tar.gz 下载' : '下载'}" aria-label="下载 ${name}">${ico('download')}</button>
+          <button class="icon-btn" data-fren="${escapeHtml(full)}" data-fname="${name}"
+            title="改名" aria-label="重命名 ${name}">${ico('pencil')}</button>
+          <button class="icon-btn danger" data-fdel="${escapeHtml(full)}"
+            title="删除" aria-label="删除 ${name}">${ico('trash')}</button>
         </div>
       </div>`;
   }).join('');
@@ -1588,7 +1596,7 @@ async function loadTasks() {
   const list = await iapi('/tasks');
   $('#task-list').innerHTML = list.length ? list.map((t) => `
     <div class="backup-item">
-      <div class="backup-ico">◷</div>
+      <div class="backup-ico">${ico('clock')}</div>
       <div>
         <div class="backup-name">${escapeHtml(t.name)} <span class="task-badge ${t.enabled ? '' : 'off'}">${t.enabled ? '启用' : '停用'}</span></div>
         <div class="backup-meta">${ACTION_TEXT[t.action]}${t.payload ? ` · /${escapeHtml(t.payload)}` : ''} · ${t.scheduleText} · 上次执行 ${t.lastRun ? fmtAgo(t.lastRun) : '从未'}</div>
@@ -1663,11 +1671,11 @@ function renderTunnelComponents(comp) {
     else if (c.installed) action = `<span class="task-badge">已安装</span>`;
     else if (me && me.role === 'admin') action = `<button class="btn btn-blue small-btn" data-comp="${name}">下载安装</button>`;
     else action = '<span class="task-badge off">未安装(需管理员)</span>';
-    const [ico, source] = COMPONENT_META[name];
+    const [compIco, source] = COMPONENT_META[name];
     const label = { playit: 'playit.gg', ssh: 'ssh(Pinggy / Serveo 使用)' }[name] || name;
     return `
       <div class="backup-item">
-        <div class="backup-ico">${ico}</div>
+        <div class="backup-ico">${compIco}</div>
         <div>
           <div class="backup-name">${label}</div>
           <div class="backup-meta">${c.installed ? escapeHtml(c.version || '') : source + comp.arch}</div>
@@ -1810,7 +1818,7 @@ async function loadBackups() {
   const backups = await iapi('/backups');
   $('#backup-list').innerHTML = backups.length ? backups.map((b) => `
     <div class="backup-item">
-      <div class="backup-ico">🗄️</div>
+      <div class="backup-ico">${ico('archive')}</div>
       <div>
         <div class="backup-name">${escapeHtml(b.name)}</div>
         <div class="backup-meta">${fmtSize(b.size)} · ${fmtAgo(b.createdAt)}</div>

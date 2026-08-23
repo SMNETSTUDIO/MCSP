@@ -208,7 +208,17 @@ body {
   background: linear-gradient(180deg, rgba(var(--acc-rgb), 0.65), var(--blue));
   box-shadow: 0 0 10px rgba(var(--acc-rgb), 0.8);
 }
-.nav-ico { width: 22px; text-align: center; font-size: 15px; opacity: 0.9; }
+.nav-ico {
+  width: 17px; height: 17px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  opacity: 0.9;
+}
+.nav-item.active .nav-ico { opacity: 1; }
 
 .sidebar-footer {
   display: flex; align-items: center; gap: 8px;
@@ -247,6 +257,7 @@ body {
 /* ── buttons ── */
 
 .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
   padding: 9px 18px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -265,7 +276,33 @@ body {
 .btn-amber { background: linear-gradient(135deg, rgba(255, 214, 10, 0.6), rgba(255, 159, 10, 0.45)); }
 .btn-blue  { background: linear-gradient(135deg, rgba(var(--acc-rgb), 0.8), rgba(var(--acc-rgb), 0.5)); }
 .btn-ghost { background: rgba(255, 255, 255, 0.08); }
+/* 强杀这类"能弄坏数据"的操作:留在危险色系里,但用描边和实心的停止区分开,
+   免得最危险的动作反而长得最不起眼 */
+.btn-danger-outline {
+  background: rgba(255, 69, 58, 0.12);
+  border-color: rgba(255, 69, 58, 0.55);
+  color: #ff8f87;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.btn-danger-outline:hover { background: rgba(255, 69, 58, 0.24); color: #ffb3ad; }
 .small-btn { padding: 7px 14px; font-size: 12.5px; }
+.btn-icon-only { padding: 9px 11px; }
+
+/* ── SVG 图标 ──
+   随字号缩放、跟随 currentColor,所以在任何按钮/主题里都自动对齐配色 */
+.ico {
+  width: 1.05em; height: 1.05em;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  vertical-align: -0.15em;
+}
+/* 像素主题:关掉抗锯齿,让直角真的硬起来 */
+[data-style="pixel"] .ico,
+[data-style="pixel"] .nav-ico { shape-rendering: crispEdges; stroke-width: 2; }
 
 /* ── views ── */
 
@@ -436,14 +473,19 @@ body {
 .player-meta { font-size: 11.5px; color: var(--text-dim); }
 .player-item .spacer { flex: 1; }
 .icon-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 6px 12px; border-radius: 9px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-dim); font: inherit; font-size: 11.5px; font-weight: 600;
-  cursor: pointer; transition: all 0.18s;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
 }
 .icon-btn:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
-.icon-btn.danger:hover { background: rgba(255, 69, 58, 0.35); border-color: rgba(255, 69, 58, 0.5); }
+/* 破坏性操作静止时就得看出来 —— 之前只有 hover 才变红,
+   于是「删除」和「下载」在页面上长得一模一样 */
+.icon-btn.danger { color: #ff8f87; border-color: rgba(255, 69, 58, 0.32); background: rgba(255, 69, 58, 0.09); }
+.icon-btn.danger:hover { background: rgba(255, 69, 58, 0.35); border-color: rgba(255, 69, 58, 0.6); color: #fff; }
 .icon-btn.gold { color: #ffd60a; }
 .icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .icon-btn:disabled:hover { color: var(--text-dim); background: rgba(255, 255, 255, 0.06); }
@@ -803,8 +845,11 @@ body {
 .breadcrumb .cur { color: var(--text); font-weight: 600; padding: 3px 6px; }
 
 .file-table { display: flex; flex-direction: column; }
+/* 文件名列曾经是 1fr,于是它把整行的富余宽度全吃掉 ——
+   在宽屏上文件名和它的大小/时间之间能空出近 500px,眼睛要横跨半屏才对得上。
+   改成给文件名一个上限,富余宽度交给 .f-spacer,元数据就跟在名字后面了 */
 .file-row {
-  display: grid; grid-template-columns: 20px 26px 1fr 100px 120px auto;
+  display: grid; grid-template-columns: 20px 24px minmax(0, 460px) 88px 104px 1fr auto;
   align-items: center; gap: 10px;
   padding: 9px 12px; border-radius: 11px;
   font-size: 13px; cursor: default;
@@ -814,10 +859,21 @@ body {
 .file-row.clickable { cursor: pointer; }
 .file-row .f-check { display: flex; align-items: center; justify-content: center; }
 .file-row .f-check input { accent-color: var(--blue); cursor: pointer; margin: 0; }
-.file-row .f-ico { font-size: 15px; text-align: center; }
+.file-row .f-ico { display: flex; align-items: center; justify-content: center; color: var(--text-dim); }
 .file-row .f-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .file-row .f-size, .file-row .f-time { color: var(--text-dim); font-size: 12px; }
+.file-row .f-size { font-variant-numeric: tabular-nums; }
 .file-row .f-actions { display: flex; gap: 6px; justify-self: end; }
+.file-row .f-actions .icon-btn { padding: 5px 8px; }
+/* 表头:让那几列读起来是表格,而不是飘着的三段文字 */
+.file-head {
+  padding-bottom: 6px; margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.6px;
+  color: var(--text-dim); text-transform: uppercase;
+}
+.file-head:hover { background: none; }
 
 /* ── upload(进度条 + 拖拽遮罩)── */
 
@@ -1312,9 +1368,10 @@ body {
   .side-status { display: none; }
   .world-grid { grid-template-columns: 1fr; }
   /* 窄屏放不下四个操作按钮:把修改时间让出来,操作换行铺在名字下面 */
-  .file-row { grid-template-columns: 20px 26px 1fr auto; }
-  .file-row .f-time { display: none; }
+  .file-row { grid-template-columns: 20px 24px minmax(0, 1fr) auto; }
+  .file-row .f-time, .file-row .f-spacer { display: none; }
   .file-row .f-actions { grid-column: 1 / -1; flex-wrap: wrap; justify-self: start; }
+  .file-head { display: none; }
 }
 
 /* ── 控制台工具栏(搜索 / 级别筛选 / 下载)── */
