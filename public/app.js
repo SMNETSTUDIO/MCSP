@@ -162,6 +162,15 @@ $$('.nav-toggle').forEach((btn) => btn.addEventListener('click', () => {
 
 function renderInstSelect() {
   const sel = $('#inst-select');
+  // 下拉框永远显示第一项,所以 currentIid 失效时必须跟着归位 ——
+  // 否则(比如刚建完第一个实例)选择器显示着实例,currentIid 却是 null,
+  // 实例页面全被 switchView 弹回总览,而点回同一个选项不触发 change,只能刷新
+  if (!instMap.has(currentIid)) {
+    const first = instMap.values().next().value;
+    currentIid = first ? first.id : null;
+    if (currentIid) localStorage.setItem('mcsp_iid', currentIid);
+    else localStorage.removeItem('mcsp_iid');
+  }
   sel.innerHTML = [...instMap.values()]
     .map((i) => `<option value="${i.id}" ${i.id === currentIid ? 'selected' : ''}>${escapeHtml(i.name)}</option>`)
     .join('');
@@ -2354,8 +2363,7 @@ function connectStream() {
 
   const list = await api('/instances');
   instMap = new Map(list.map((i) => [i.id, i]));
-  if (!currentIid || !instMap.has(currentIid)) currentIid = list[0] ? list[0].id : null;
-  renderInstSelect();
+  renderInstSelect();          // 顺带把失效的 currentIid 归位
   if (currentIid) await refreshInstanceContext();
   switchView('overview');
   connectStream();
