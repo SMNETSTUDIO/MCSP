@@ -73,10 +73,39 @@ async function archiveRoundtrip() {
   }
 }
 
+/* 粘贴时的自动改名。边界都在这儿:复合后缀、已经带 (n) 的、没有后缀的 dotfile。
+   不用起服务器,所以放在 HTTP 用例之前先跑。 */
+async function uniqueNameRoundtrip() {
+  const fsp = require('fs/promises');
+  const path = require('path');
+  const os = require('os');
+  const { reserveUniqueName } = require('../src/routes/instances');
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcsp-uniq-'));
+  try {
+    const take = async (name) => {
+      const got = await reserveUniqueName(dir, name);   // 顺带把名字占住,下次调用才会撞
+      return got;
+    };
+    check('uniqueName 首次原样', (await take('a.txt')) === 'a.txt');
+    check('uniqueName 撞名加 (2)', (await take('a.txt')) === 'a (2).txt');
+    check('uniqueName 接着数 (3)', (await take('a.txt')) === 'a (3).txt');
+    // 复合后缀只认最后一段 —— 和多数文件管理器一致
+    check('uniqueName 复合后缀', (await take('c.tar.gz')) === 'c.tar.gz');
+    check('uniqueName 复合后缀撞名', (await take('c.tar.gz')) === 'c.tar (2).gz');
+    // dotfile 没有 stem/ext 之分,不能拆成 " (2).env"
+    check('uniqueName dotfile', (await take('.env')) === '.env');
+    check('uniqueName dotfile 撞名', (await take('.env')) === '.env (2)');
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   console.log(`smoke → ${BASE}`);
 
   await archiveRoundtrip();
+  await uniqueNameRoundtrip();
 
   // 健康检查(免鉴权)
   let r = await req('GET', '/api/health');
@@ -157,6 +186,45 @@ async function archiveRoundtrip() {
 
     r = await req('POST', `/api/instances/${iid}/files/archive`, { dir: '/', names: [], format: 'zip' });
     check('archive empty selection rejected', r.status === 400);
+
+    /* 移动 / 复制:两侧路径都要校验,名字要逐个校验 */
+    const xfer = (b) => req('POST', `/api/instances/${iid}/files/transfer`, b);
+
+    r = await xfer({ op: 'move', from: '/', names: ['../etc'], to: '/' });
+    check('transfer name sandbox', r.status === 400);
+
+    r = await xfer({ op: 'move', from: '/../../etc', names: ['x'], to: '/' });
+    check('transfer source sandbox', r.status === 400);
+
+    r = await xfer({ op: 'copy', from: '/', names: ['x'], to: '/../../tmp' });
+    check('transfer dest sandbox', r.status === 400);
+
+    /* 目录不能放进自己里面。这条是纯词法判断且排在存在性检查之前,
+       所以无论实例里有没有 world 目录都稳定返回 400 */
+    r = await xfer({ op: 'move', from: '/', names: ['world'], to: '/world/sub' });
+    check('transfer self-descendant guard', r.status === 400);
+
+    /* 同前缀目录不能被误伤:'/a/worldsave'.startsWith('/a/world') 是 true */
+    r = await xfer({ op: 'move', from: '/', names: ['world'], to: '/world_nether' });
+    check('transfer sibling prefix allowed', r.status !== 400);
+
+    r = await xfer({ op: 'chmod', from: '/', names: ['a'], to: '/' });
+    check('transfer bad op rejected', r.status === 400);
+
+    r = await xfer({ op: 'move', from: '/', names: [], to: '/' });
+    check('transfer empty selection rejected', r.status === 400);
+
+    r = await xfer({ op: 'move', from: '/', names: new Array(501).fill('a'), to: '/' });
+    check('transfer batch cap', r.status === 400);
+
+    r = await req('DELETE', `/api/instances/${iid}/files/batch`, { dir: '/', names: ['../../etc'] });
+    check('batch delete name sandbox', r.status === 400);
+
+    r = await req('DELETE', `/api/instances/${iid}/files/batch`, { dir: '/../../etc', names: ['passwd'] });
+    check('batch delete dir sandbox', r.status === 400);
+
+    r = await req('DELETE', `/api/instances/${iid}/files/batch`, { dir: '/', names: [] });
+    check('batch delete empty selection rejected', r.status === 400);
 
     r = await req('GET', `/api/instances/${iid}/properties`);
     check('properties', r.status === 200 && typeof r.json === 'object');

@@ -1017,7 +1017,185 @@ router.delete('/:iid/files', asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* 重命名 / 同目录内改名(跨目录移动请用剪切板式操作,这里只改最后一段) */
+/* ── 批量操作与剪贴板(移动 / 复制)── */
+
+/* 一次最多处理多少项:挡住手滑或脚本把几万条名字塞进来 */
+const BATCH_MAX = 500;
+
+/* 移动/复制的互斥锁。不复用 archiveBusy:打包动辄几分钟,粘贴通常亚秒级,
+   共用一把锁会让后台打包期间每次粘贴都 409,而且弹的是"已有压缩任务"这种
+   驴唇不对马嘴的提示。两者也不像两个并发打包那样真的互斥(不写同一个输出)。 */
+const fileOpBusy = new Set();
+
+/**
+ * 目标目录是不是源自身、或源的子孙。
+ * 把 /world 移进 /world/sub 会无限递归;系统调用层面其实会拒(rename → EINVAL、
+ * cp → ERR_FS_CP_EINVAL),但那是在批量跑到这一项时才炸,前面几项已经动过了。
+ * 所以前置成纯词法判断,整批一起拒。
+ *
+ * 注意不能只 startsWith(src):'/a/worldsave'.startsWith('/a/world') 是 true,
+ * 会把无辜的同前缀目录一起误伤。必须补上分隔符。
+ */
+const isSelfOrDescendant = (src, destDir) =>
+  destDir === src || destDir.startsWith(src + path.sep);
+
+/**
+ * 目标目录里已有同名时挑一个不冲突的名字:config.yml → config (2).yml。
+ * 已经带 (n) 后缀的接着往下数,免得叠成 "config (2) (2).yml"。
+ *
+ * 用 O_EXCL 占位而不是"先 existsSync 再写":后者在两个标签页同时粘贴时
+ * 会挑到同一个名字,而 fsp.rename 覆盖已存在文件是**静默成功**的(实测),
+ * 于是先落地的那份被无声吃掉。这里原子地把名字占下来,调用方随后替换。
+ */
+async function reserveUniqueName(dir, name) {
+  const dotfile = name.startsWith('.') && name.indexOf('.', 1) === -1;
+  const ext = dotfile ? '' : path.extname(name);
+  let stem = ext ? name.slice(0, -ext.length) : name;
+  let n = 1;
+  const m = stem.match(/^(.*) \((\d+)\)$/);
+  if (m) { stem = m[1]; n = parseInt(m[2], 10); }
+
+  let candidate = name;
+  for (let i = 0; i < 10000; i++) {
+    try {
+      const fh = await fsp.open(path.join(dir, candidate), 'wx');
+      await fh.close();
+      return candidate;                       // 占位文件已建,调用方负责删掉再写
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      candidate = `${stem} (${++n})${ext}`;
+    }
+  }
+  throw new Error('重名太多,无法生成新名字');
+}
+
+/** 批量删除 { dir, names[] } */
+router.delete('/:iid/files/batch', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { dir, names } = req.body || {};
+  if (!Array.isArray(names) || !names.length) return res.status(400).json({ ok: false, error: '没有选中任何项' });
+  if (names.length > BATCH_MAX) return res.status(400).json({ ok: false, error: `一次最多 ${BATCH_MAX} 项` });
+  if (!names.every(isSafeName)) return res.status(400).json({ ok: false, error: '名称非法' });
+
+  const parent = safePath(inst, dir);
+  if (!parent) return res.status(400).json({ ok: false, error: '非法路径' });
+  if (!fs.existsSync(parent) || !(await fsp.stat(parent)).isDirectory()) {
+    return res.status(404).json({ ok: false, error: '目录不存在' });
+  }
+
+  const done = [], failed = [];
+  for (const name of names) {
+    const p = path.join(parent, name);
+    if (p === inst.dir) { failed.push({ name, error: '非法路径' }); continue; }
+    try { await fsp.rm(p, { recursive: true, force: true }); done.push(name); }
+    catch (e) { failed.push({ name, error: e.code || e.message }); }
+  }
+
+  disk.refresh(inst.id);          // 删的可能是几个大目录,增量算不出来,整体重扫
+  if (names.includes('server.properties')) inst.invalidatePropsCache();
+  inst.log('INFO', `[MCSP] 批量删除 ${done.length} 项${failed.length ? `,失败 ${failed.length} 项` : ''}`);
+  res.json({ ok: !failed.length, done, failed });
+}));
+
+/** 移动 / 复制 { op:'move'|'copy', from, names[], to } —— 剪贴板的落地接口 */
+router.post('/:iid/files/transfer', asyncHandler(async (req, res) => {
+  const inst = req.inst;
+  const { op, from, names, to } = req.body || {};
+  if (op !== 'move' && op !== 'copy') return res.status(400).json({ ok: false, error: '操作无效' });
+  if (!Array.isArray(names) || !names.length) return res.status(400).json({ ok: false, error: '没有选中任何项' });
+  if (names.length > BATCH_MAX) return res.status(400).json({ ok: false, error: `一次最多 ${BATCH_MAX} 项` });
+  if (!names.every(isSafeName)) return res.status(400).json({ ok: false, error: '名称非法' });
+
+  const srcDir = safePath(inst, from);
+  const dstDir = safePath(inst, to);
+  if (!srcDir || !dstDir) return res.status(400).json({ ok: false, error: '非法路径' });
+
+  /* 词法守卫排在文件系统探测之前 —— 越界请求的返回码就不会取决于
+     实例里恰好有没有那个目录 */
+  for (const name of names) {
+    if (isSelfOrDescendant(path.join(srcDir, name), dstDir)) {
+      return res.status(400).json({ ok: false, error: `不能把「${name}」放进它自己里面` });
+    }
+  }
+  if (op === 'move' && srcDir === dstDir) return res.json({ ok: true, done: [], failed: [] });
+
+  if (!fs.existsSync(dstDir) || !(await fsp.stat(dstDir)).isDirectory()) {
+    return res.status(404).json({ ok: false, error: '目标目录不存在' });
+  }
+
+  const items = [], failed = [];
+  for (const name of names) {
+    const src = path.join(srcDir, name);
+    let st;
+    try {
+      st = await fsp.lstat(src);
+    } catch {
+      // 剪贴板放着的时候别的标签页把文件删了 —— 这是常态,不该整批崩掉,
+      // 逐项报告即可(格式非法之类的才值得整批拒)
+      failed.push({ name, error: '已不存在' });
+      continue;
+    }
+    // 软链一律拒绝:复制它会在目标位置重建一个指向沙箱外的链接,
+    // 相当于把越权推迟到下一次请求。archive.js 打包时也是这么跳过的。
+    if (st.isSymbolicLink()) return res.status(400).json({ ok: false, error: `不支持移动/复制软链接:${name}` });
+    if (!st.isFile() && !st.isDirectory()) return res.status(400).json({ ok: false, error: `不支持的文件类型:${name}` });
+    items.push({ name, src, isDir: st.isDirectory(), size: st.size });
+  }
+  if (!items.length) return res.status(404).json({ ok: false, error: '选中的项都已不存在' });
+
+  /* 复制才吃配额。移动在同一文件系统里是零字节增减,拦它反而会把
+     已经超配额的用户锁死在无法整理的状态 */
+  let needMB = 0;
+  if (op === 'copy') {
+    for (const it of items) needMB += (it.isDir ? await dirSize(it.src) : it.size) / 1048576;
+    const qerr = diskQuotaError(req, needMB);
+    if (qerr) return res.status(403).json({ ok: false, error: qerr });
+  }
+
+  if (fileOpBusy.has(inst.id)) return res.status(409).json({ ok: false, error: '该实例已有文件操作在进行中' });
+  fileOpBusy.add(inst.id);
+  const done = [];
+  try {
+    for (const it of items) {
+      let placeholder = null;
+      try {
+        const finalName = await reserveUniqueName(dstDir, it.name);
+        placeholder = path.join(dstDir, finalName);
+        await fsp.rm(placeholder, { force: true });          // 占位是个空文件,先撤掉
+        if (op === 'move') {
+          try { await fsp.rename(it.src, placeholder); }
+          catch (e) {
+            if (e.code !== 'EXDEV') throw e;                 // 跨设备时 rename 不管用,退化成拷完再删
+            await fsp.cp(it.src, placeholder, { recursive: true, verbatimSymlinks: true });
+            await fsp.rm(it.src, { recursive: true, force: true });
+          }
+        } else {
+          // dereference 保持默认 false:实测传 true 会把软链指向的沙箱外内容
+          // 真的拷进实例目录。verbatimSymlinks 再兜住目录内部嵌套的软链。
+          await fsp.cp(it.src, placeholder, {
+            recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true,
+          });
+        }
+        done.push({ name: it.name, as: finalName });
+      } catch (e) {
+        if (placeholder) await fsp.rm(placeholder, { recursive: true, force: true }).catch(() => {});
+        failed.push({ name: it.name, error: e.code || e.message });
+      }
+    }
+  } finally {
+    fileOpBusy.delete(inst.id);
+  }
+
+  if (op === 'copy') {
+    // 中途失败时已拷字节数算不准,直接整体重扫
+    if (failed.length) disk.refresh(inst.id); else disk.bump(inst.id, needMB);
+  }
+  if (names.includes('server.properties')) inst.invalidatePropsCache();
+  inst.log('INFO', `[MCSP] ${op === 'move' ? '移动' : '复制'} ${done.length} 项到 ${to}${failed.length ? `,失败 ${failed.length} 项` : ''}`);
+  res.json({ ok: !failed.length, done, failed });
+}));
+
+/* 重命名 / 同目录内改名(跨目录移动走 /files/transfer,这里只改最后一段) */
 router.post('/:iid/files/rename', asyncHandler(async (req, res) => {
   const { path: rel, name } = req.body || {};
   if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '名称非法' });
@@ -1244,3 +1422,6 @@ router.post('/:iid/tunnel/check', asyncHandler(async (req, res) => {
 }));
 
 module.exports = router;
+/* 供 smoke 做本地往返测试 —— 自动改名的边界(复合后缀、已有 (n)、dotfile)
+   最容易在重构时悄悄改掉行为,而这条路径不需要起服务器就能验 */
+module.exports.reserveUniqueName = reserveUniqueName;
