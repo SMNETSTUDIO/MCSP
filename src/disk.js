@@ -11,10 +11,11 @@ const { ROOT, BACKUPS_DIR } = require('./config');
 const { dirSize } = require('./utils');
 const notify = require('./notify');
 
-/* 磁盘占用超过这个比例就告警一次(去重 5 分钟,由 notify 负责) */
-const DISK_WARN_PCT = 90;
-
 const SCAN_INTERVAL_MS = 60_000;
+
+/* 磁盘告警线在系统设置里,每次扫描现读 —— 改完不用重启面板。
+   settings 反过来不依赖 disk,这里直接 require 不成环 */
+const diskWarnPct = () => require('./settings').get().thresholds.diskWarnPct;
 
 /** iid → { instMB, backupMB, totalMB, at } */
 const usage = new Map();
@@ -51,7 +52,7 @@ async function scan() {
   scanning = true;
   try {
     const d = await hostDisk();
-    if (d && d.usedPct >= DISK_WARN_PCT) {
+    if (d && d.usedPct >= diskWarnPct()) {
       notify.emit('diskLow', {
         title: `宿主机磁盘已用 ${d.usedPct}%`,
         text: `已用 ${(d.usedMB / 1024).toFixed(1)} GB / 共 ${(d.totalMB / 1024).toFixed(1)} GB,`

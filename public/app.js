@@ -66,7 +66,23 @@ async function api(path, opts = {}) {
     body: opts.body ? JSON.stringify(opts.body) : undefined,
   });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
-  return res.json();
+  const data = await res.json();
+  // 强制两步验证:后端把所有业务接口都拦了,光弹 toast 用户会以为面板坏了。
+  // 直接把人送到「账号安全」页 —— 那是唯一还能用的地方,也正是要去的地方。
+  if (res.status === 403 && data && data.code === '2fa_required') {
+    force2FA(data.error);
+    throw new Error('2fa_required');
+  }
+  return data;
+}
+
+/* 强制 2FA 引导。只弹一次横幅并切到账号页,别每个被拒的请求都弹一遍 */
+let force2FAShown = false;
+function force2FA(msg) {
+  if (force2FAShown) return;
+  force2FAShown = true;
+  toast(msg || '管理员已要求启用两步验证', true);
+  try { switchView('account'); } catch { /* 初始化早期还没准备好视图 */ }
 }
 
 const iapi = (path, opts) => api(`/instances/${currentIid}${path}`, opts);
@@ -2406,21 +2422,75 @@ async function loadSystem() {
   $('#sys-bk-count').value = s.backupKeepCount ?? 10;
   $('#sys-bk-days').value = s.backupKeepDays ?? 30;
   $('#sys-announcement').value = s.announcement || '';
+  $('#sys-2fa').checked = !!s.require2FA;
+  const t = s.thresholds || {};
+  $('#sys-disk-pct').value = t.diskWarnPct ?? 90;
+  $('#sys-crash-win').value = t.crashWindowMin ?? 10;
+  $('#sys-crash-max').value = t.crashMaxRestarts ?? 3;
+  $('#sys-crash-delay').value = t.crashRestartDelaySec ?? 5;
   renderNotify(s.notify);
   loadAudit();
 }
 
 $('#sys-save').addEventListener('click', async () => {
+  // 自己还没配 2FA 就打开强制开关 = 把自己锁在门外(设置页本身也会被拦)。
+  // 这个后果不可逆到"得去改磁盘上的 JSON",值得挡一道确认
+  if ($('#sys-2fa').checked && me && !me.twoFactor
+      && !confirm('你自己还没有启用两步验证。开启后你会被立刻挡在面板外,只能先去「账号安全」配置 TOTP,'
+                  + '而且没法再从面板关掉这个开关。\n\n确定继续吗?')) return;
   const r = await api('/settings', {
     method: 'PUT',
     body: {
       registrationEnabled: $('#sys-reg').checked,
+      require2FA: $('#sys-2fa').checked,
       announcement: $('#sys-announcement').value,
       backupKeepCount: parseInt($('#sys-bk-count').value, 10) || 0,
       backupKeepDays: parseInt($('#sys-bk-days').value, 10) || 0,
+      thresholds: {
+        diskWarnPct: parseInt($('#sys-disk-pct').value, 10),
+        crashWindowMin: parseInt($('#sys-crash-win').value, 10),
+        crashMaxRestarts: parseInt($('#sys-crash-max').value, 10),
+        crashRestartDelaySec: parseInt($('#sys-crash-delay').value, 10),
+      },
     },
   });
-  if (r.ok) { toast('系统设置已保存'); renderAnnouncement(r.settings); }
+  if (r.ok) { toast('系统设置已保存'); renderAnnouncement(r.settings); loadSystem(); }
+  else toast(r.error, true);
+});
+
+/* ── 面板配置备份 ── */
+
+$('#pb-export').addEventListener('click', () => {
+  // 走 <a download> 而不是 fetch:响应带 Content-Disposition,交给浏览器直接落盘
+  const a = document.createElement('a');
+  a.href = '/api/panel/export';
+  a.download = '';
+  a.click();
+  toast('导出文件含口令哈希与 Token 摘要,请妥善保管');
+});
+
+$('#pb-import').addEventListener('click', () => $('#pb-file').click());
+
+$('#pb-file').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';        // 选同一个文件两次也要能触发
+  if (!file) return;
+  let bundle;
+  try {
+    bundle = JSON.parse(await file.text());
+  } catch (err) {
+    return toast(`不是合法的 JSON 文件: ${err.message}`, true);
+  }
+  // 先干跑:让用户看清楚要盖掉什么再决定,而不是点完才知道
+  const pre = await api('/panel/import/preview', { method: 'POST', body: { bundle } });
+  if (!pre.ok) return toast(pre.error, true);
+  const s = pre.summary;
+  const when = pre.exportedAt ? new Date(pre.exportedAt).toLocaleString() : '未知时间';
+  if (!confirm(`这个备份导出于 ${when}(面板 v${pre.panelVersion || '?'}),包含:\n`
+    + `  用户 ${s.users} 个(管理员 ${s.admins})\n  实例元数据 ${s.instances} 条\n  计划任务 ${s.tasks} 条\n\n`
+    + `将覆盖 ${s.files.join('、')}。\n现有文件会另存为 .bak-<时间戳>,导入后需要重启面板。\n\n确定导入吗?`)) return;
+  const r = await api('/panel/import', { method: 'POST', body: { bundle } });
+  if (r.ok) alert(`导入完成:${r.restored.join('、')}\n\n${r.note}`);
   else toast(r.error, true);
 });
 
@@ -2641,6 +2711,14 @@ function connectStream() {
   $('#me-avatar').style.background = avatarColor(me.username);
   if (me.role === 'admin') $$('.admin-only').forEach((el) => { el.hidden = false; });
   if (me.defaultPassword) toast('你仍在使用默认密码,请点击侧栏 🔑 尽快修改', true);
+
+  // 强制 2FA 且自己还没配:后面每个接口都会 403,继续初始化只会得到一个空白面板。
+  // 直接停在账号安全页,那里的 /auth/* 接口是唯一放行的
+  if (me.require2FA && !me.twoFactor && !me.viaToken) {
+    switchView('account');
+    force2FA('管理员已要求所有账号启用两步验证,请先在此完成配置');
+    return;
+  }
 
   const list = await api('/instances');
   instMap = new Map(list.map((i) => [i.id, i]));

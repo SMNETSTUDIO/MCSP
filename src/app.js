@@ -36,8 +36,13 @@ app.use('/api/auth/oauth', require('./oauth').router);
 /* 其余 /api 全部需要会话 */
 app.use('/api', auth.requireAuth);
 
+/* 强制两步验证:开了之后,没配 TOTP 的账号只放行 /api/auth/*。
+   必须排在所有业务路由前面,否则就成了摆设 */
+app.use('/api', auth.requireTwoFactor);
+
 app.use('/api/oauth', require('./oauth').adminRouter);
 app.use('/api/settings', require('./settings').router);   // 系统设置:注册开关、公告
+app.use('/api/panel', require('./panelbackup').router);   // 面板配置导出/导入
 
 app.use('/api/users', require('./routes/users').router);
 

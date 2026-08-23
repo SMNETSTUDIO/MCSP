@@ -127,6 +127,34 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+/**
+ * 强制两步验证(功能 9)。开启后没配 TOTP 的账号只能访问 /auth/*,
+ * 也就是"除了去把 2FA 配上,别的什么都干不了"。
+ *
+ * 只拦网页会话,不拦 Bearer Token:脚本没法做 TOTP,一刀切会在开启开关的
+ * 那一刻打断所有自动化。这不留后门 —— 建 Token 本身要走会话,已经被拦住了,
+ * 所以没开 2FA 的人开启后无法再签发新 Token。存量 Token 仍然有效,
+ * 需要收口的话在「账号安全」里逐个吊销。
+ *
+ * 返回 403 + code:'2fa_required',前端据此弹强制配置引导而不是当成普通报错。
+ *
+ * 注意这个开关会把开启它的管理员一起挡住(故意的 —— 只约束别人的安全策略
+ * 没有意义),而 /api/settings 也在拦截范围内,所以开了之后不能靠面板再关掉。
+ * 正常出路是照着引导把自己的 TOTP 配上;真的丢了验证器,改
+ * data/settings.json 里的 require2FA 为 false 再重启面板。
+ */
+function requireTwoFactor(req, res, next) {
+  if (!require('./settings').get().require2FA) return next();
+  if (req.user.viaToken) return next();
+  if (req.path.startsWith('/auth/')) return next();
+  const user = users.find((u) => u.username === req.user.username);
+  if (user && user.totp && user.totp.enabled) return next();
+  return res.status(403).json({
+    ok: false, code: '2fa_required',
+    error: '管理员已要求所有账号启用两步验证,请先在「账号安全」中完成配置',
+  });
+}
+
 /** 创建会话并返回 token(密码登录与 OAuth 登录共用) */
 function createSession(username, req) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -221,7 +249,14 @@ router.post('/logout', (req, res) => {
 
 router.get('/me', requireAuth, (req, res) => {
   const user = users.find((u) => u.username === req.user.username);
-  res.json({ ok: true, user: { username: user.username, role: user.role, defaultPassword: !!user.defaultPassword, twoFactor: !!(user.totp && user.totp.enabled) } });
+  res.json({ ok: true, user: {
+    username: user.username, role: user.role,
+    defaultPassword: !!user.defaultPassword,
+    twoFactor: !!(user.totp && user.totp.enabled),
+    // 前端据这两项决定要不要弹强制配置引导
+    require2FA: !!require('./settings').get().require2FA,
+    viaToken: !!req.user.viaToken,
+  } });
 });
 
 /* ── E3:两步验证(TOTP)── */
@@ -364,6 +399,6 @@ router.delete('/tokens/:id', requireAuth, (req, res) => {
 
 module.exports = {
   users, saveUsers, hashPassword, verifyPassword,
-  getSession, requireAuth, requireAdmin, dropUserSessions, createSession,
+  getSession, requireAuth, requireAdmin, requireTwoFactor, dropUserSessions, createSession,
   router,
 };

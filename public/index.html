@@ -686,8 +686,16 @@
               <label>开放注册</label>
               <label class="switch prop-switch"><input type="checkbox" id="sys-reg"><span class="slider"></span></label>
             </div>
+            <div class="prop-row">
+              <label>强制两步验证<span class="dim small">所有账号(含你自己)</span></label>
+              <label class="switch prop-switch"><input type="checkbox" id="sys-2fa"><span class="slider"></span></label>
+            </div>
             <div class="prop-row"><label>备份保留份数(每实例,0 = 不限)</label><input id="sys-bk-count" type="number" min="0" max="3650" /></div>
             <div class="prop-row"><label>备份保留天数(0 = 不限)</label><input id="sys-bk-days" type="number" min="0" max="3650" /></div>
+            <div class="prop-row"><label>磁盘告警线 %<span class="dim small">50–99</span></label><input id="sys-disk-pct" type="number" min="50" max="99" /></div>
+            <div class="prop-row"><label>崩溃计数窗口(分钟)<span class="dim small">1–1440</span></label><input id="sys-crash-win" type="number" min="1" max="1440" /></div>
+            <div class="prop-row"><label>窗口内最多自动重启<span class="dim small">0 = 关闭自动重启</span></label><input id="sys-crash-max" type="number" min="0" max="100" /></div>
+            <div class="prop-row"><label>崩溃后重启延迟(秒)<span class="dim small">1–3600</span></label><input id="sys-crash-delay" type="number" min="1" max="3600" /></div>
           </div>
           <div class="prop-row" style="margin-top:14px">
             <label>公告<span class="dim small">留空不显示</span></label>
@@ -698,7 +706,32 @@
             公告修改后立即对所有用户生效;用户关掉的公告再次编辑后会重新弹出。<br>
             备份保留策略在每次备份成功后执行,两个条件取并集(任一超限即删)。最新的一份永远保留,
             所以把天数调得很短也不会把刚做完的备份删掉。<b>不影响手动删除</b>,也不会去动历史遗留的备份 ——
-            它们会在下次备份时一并按策略清理。
+            它们会在下次备份时一并按策略清理。<br>
+            <b>强制两步验证</b>会连你自己一起挡住:没配 TOTP 的账号除了「账号安全」页什么都打不开。
+            <b>开启前请先给自己配好 2FA</b> —— 开启后系统设置页本身也会被拦,没法再从面板关掉
+            (真被锁在外面:改 <code>data/settings.json</code> 的 <code>require2FA</code> 为 false 再重启面板)。
+            API Token 不受此开关影响,否则开启的瞬间所有脚本都会断。<br>
+            崩溃阈值按实例类型调:重度模组服启动慢、崩得勤,3 次/10 分钟容易误判成"重启风暴"而停手。
+          </div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
+            <span>面板配置备份 <span class="dim small">面板自身的配置,不含世界与插件</span></span>
+            <span>
+              <button class="icon-btn" id="pb-export">导出</button>
+              <button class="icon-btn danger" id="pb-import">导入…</button>
+              <input type="file" id="pb-file" accept="application/json,.json" hidden />
+            </span>
+          </div>
+          <div class="dim small">
+            打包 <code>settings.json</code> / <code>users.json</code> / <code>instances.json</code> /
+            <code>tasks.json</code> / <code>oauth.json</code>,用于换机器或误删恢复。
+            <b>不含</b>会话、登录失败计数与审计日志(一次性状态,搬过去反而有害),
+            也<b>不含</b>实例目录和备份包本身 —— 那是 GB 级的数据,把 <code>instances/</code>
+            目录一起拷过去才能真正接上。<br>
+            <b>导出文件里有口令哈希、TOTP 密钥和 API Token 摘要,等同于凭据库,请按密钥的规格保管。</b>
+            导入会先把现有文件另存为 <code>.bak-&lt;时间戳&gt;</code>,写完需要重启面板才生效。
           </div>
         </div>
 

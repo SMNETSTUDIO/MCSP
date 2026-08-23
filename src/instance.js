@@ -21,10 +21,23 @@ const TASKSET_OK = (() => { try { return spawnSync('taskset', ['-V']).status ===
 
 /* 崩溃自动重启:窗口内最多重启这么多次,超了就停手。
    端口被占、jar 损坏这类"起来就死"的故障否则会无限重启刷屏,
-   还会把真正的报错顶出日志缓冲区。 */
-const CRASH_WINDOW_MS = 10 * 60_000;
-const CRASH_MAX_RESTARTS = 3;
-const CRASH_RESTART_DELAY_MS = 5000;
+   还会把真正的报错顶出日志缓冲区。
+
+   三个参数都在系统设置里(thresholds),每次崩溃现读 —— 重度模组服崩得比原版
+   勤得多,固定 3 次/10 分钟对它们太紧。lazy require 是为了避开
+   settings → auth → … 与本模块的加载顺序纠缠。 */
+function crashCfg() {
+  const t = require('./settings').get().thresholds;
+  return {
+    windowMs: t.crashWindowMin * 60_000,
+    maxRestarts: t.crashMaxRestarts,
+    delayMs: t.crashRestartDelaySec * 1000,
+  };
+}
+
+/* 每个实例最多留几次崩溃现场。每条含 200 行 tail(约 30 KB),20 条够回溯
+   一整轮"改配置→崩→再改"的排查过程,又不会把 data/ 撑大 */
+const CRASH_HISTORY_MAX = 20;
 
 /* 控制台内存缓冲行数。原来是 1000,查一次崩溃根本不够翻 ——
    一行日志对象约 150 字节,5000 行 × 几十个实例仍是几十 MB 量级,可接受。 */
@@ -128,6 +141,10 @@ class Instance {
     this._crashTimer = null;          // 待触发的自动重启
     this._killedByUser = false;       // kill() 置位:强杀是用户要的,不算崩溃
     this.autoRestartBlocked = false;  // 触发风暴保护后置位,手动启动时清掉
+    this.lastExitCode = null;         // 最近一次进程退出码/信号,崩溃归档时记进去
+    this.lastSignal = null;
+    // 崩溃历史落盘(data/crashes/<iid>.json):面板重启后还能查上次为什么崩
+    this.crashes = readJson(path.join(DATA_DIR, 'crashes', `${this.id}.json`), []);
 
     this.tunnel = { ...DEFAULT_TUNNEL(), ...(meta.tunnel || {}) };
     this.tunnelProc = null;
@@ -358,6 +375,8 @@ class Instance {
       this.players.clear();
       this.metrics.cpu = 0;
       this.metrics.ram = 0;
+      this.lastExitCode = code;
+      this.lastSignal = signal;
       this.log(wasStopping || code === 0 ? 'INFO' : 'WARN',
         `[MCSP] 进程退出 (code=${code === null ? 'null' : code}${signal ? `, signal=${signal}` : ''})`);
       this.emitState();
@@ -408,26 +427,37 @@ class Instance {
 
   _onCrash() {
     if (!this.autoRestart) return;
+    const { windowMs, maxRestarts, delayMs } = crashCfg();
+    const windowMin = Math.round(windowMs / 60000);
+    // 崩溃报告落盘要赶在自动重启之前:重启会往 crash-reports/ 里再写一份,
+    // 也会把内存日志缓冲刷走 —— 这一刻的现场是最全的
+    this._captureCrash();
+    if (maxRestarts === 0) {
+      this.autoRestartBlocked = true;
+      this.log('ERROR', '[MCSP] 崩溃自动重启已在系统设置中关闭,实例保持停止');
+      this.emitState();
+      return;
+    }
     const now = Date.now();
-    this._crashTimes = this._crashTimes.filter((t) => now - t < CRASH_WINDOW_MS);
+    this._crashTimes = this._crashTimes.filter((t) => now - t < windowMs);
     this._crashTimes.push(now);
 
-    if (this._crashTimes.length > CRASH_MAX_RESTARTS) {
+    if (this._crashTimes.length > maxRestarts) {
       this.autoRestartBlocked = true;
-      this.log('ERROR', `[MCSP] ${CRASH_WINDOW_MS / 60000} 分钟内异常退出 ${this._crashTimes.length} 次,已停止自动重启 —— 请查日志排查后手动启动`);
+      this.log('ERROR', `[MCSP] ${windowMin} 分钟内异常退出 ${this._crashTimes.length} 次,已停止自动重启 —— 请查日志排查后手动启动`);
       notify.emit('restartBlocked', {
         title: `实例「${this.name}」已停止自动重启`,
-        text: `${CRASH_WINDOW_MS / 60000} 分钟内异常退出 ${this._crashTimes.length} 次,面板已放弃自动拉起。\n`
+        text: `${windowMin} 分钟内异常退出 ${this._crashTimes.length} 次,面板已放弃自动拉起。\n`
           + `最后几行日志:\n` + this.logs.slice(-6).map((l) => `${l.level} ${l.message}`).join('\n'),
         dedupeKey: this.id,
       });
       this.emitState();
       return;
     }
-    this.log('WARN', `[MCSP] 检测到异常退出,${CRASH_RESTART_DELAY_MS / 1000} 秒后自动重启 (${this._crashTimes.length}/${CRASH_MAX_RESTARTS})`);
+    this.log('WARN', `[MCSP] 检测到异常退出,${delayMs / 1000} 秒后自动重启 (${this._crashTimes.length}/${maxRestarts})`);
     notify.emit('crash', {
       title: `实例「${this.name}」异常退出`,
-      text: `${CRASH_RESTART_DELAY_MS / 1000} 秒后将自动重启(第 ${this._crashTimes.length}/${CRASH_MAX_RESTARTS} 次)。\n`
+      text: `${delayMs / 1000} 秒后将自动重启(第 ${this._crashTimes.length}/${maxRestarts} 次)。\n`
         + this.logs.slice(-6).map((l) => `${l.level} ${l.message}`).join('\n'),
       dedupeKey: this.id,
     });
@@ -436,7 +466,51 @@ class Instance {
       if (this.state !== 'stopped') return;    // 这几秒里用户可能已经自己启动了
       const r = this.start({ auto: true });
       if (!r.ok) this.log('ERROR', `[MCSP] 自动重启失败: ${r.error}`);
-    }, CRASH_RESTART_DELAY_MS);
+    }, delayMs);
+  }
+
+  /**
+   * 崩溃现场存档(功能 3)。存两样东西,因为它们回答不同的问题:
+   *   · tail:面板内存缓冲的最后 200 行 —— 崩在启动阶段、还没来得及写
+   *     crash-reports/ 的场景(端口占用、JVM 参数写错)只有这个有用。
+   *   · report:服务端自己写的 crash-reports/*.txt,取退出前后最新的那份 ——
+   *     真正的 Java 堆栈在这里面。
+   * 只记路径不复制文件:一份 crash report 几百 KB,复制一遍纯属浪费磁盘。
+   */
+  _captureCrash() {
+    try {
+      const dir = path.join(this.dir, 'crash-reports');
+      let report = null;
+      try {
+        const newest = fs.readdirSync(dir)
+          .filter((f) => f.endsWith('.txt'))
+          .map((f) => ({ f, m: fs.statSync(path.join(dir, f)).mtimeMs }))
+          .sort((a, b) => b.m - a.m)[0];
+        // 只认这次崩溃前后 2 分钟内写的,否则会把上个月的旧报告当成本次现场
+        if (newest && Date.now() - newest.m < 120_000) report = newest.f;
+      } catch { /* 没有 crash-reports 目录是常态 */ }
+
+      this.crashes.unshift({
+        at: Date.now(),
+        exitCode: this.lastExitCode ?? null,
+        signal: this.lastSignal ?? null,
+        report,
+        tail: this.logs.slice(-200).map((l) => `${l.ts} ${l.level} ${l.message}`),
+      });
+      this.crashes.length = Math.min(this.crashes.length, CRASH_HISTORY_MAX);
+      this._saveCrashes();
+    } catch (err) {
+      this.log('WARN', `[MCSP] 崩溃现场记录失败: ${err.message}`);
+    }
+  }
+
+  _crashFile() { return path.join(DATA_DIR, 'crashes', `${this.id}.json`); }
+
+  _saveCrashes() {
+    try {
+      fs.mkdirSync(path.join(DATA_DIR, 'crashes'), { recursive: true });
+      fs.writeFileSync(this._crashFile(), JSON.stringify(this.crashes));
+    } catch { /* 记不下来也不能影响实例本身 */ }
   }
 
   /**
