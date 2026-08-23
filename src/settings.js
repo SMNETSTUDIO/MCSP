@@ -37,6 +37,20 @@ const settings = {
     crashMaxRestarts: 3,    // 窗口内最多自动拉起几次,0 = 关闭崩溃自动重启
     crashRestartDelaySec: 5, // 崩溃后隔多久再拉
   },
+  /* 异地备份目标(见 remotebackup.js)。默认关闭 —— 没配的人不该因为
+     升级就开始往某个地方传东西 */
+  backupRemote: {
+    enabled: false,
+    type: 's3',                 // s3 | webdav | rclone
+    prefix: '',                 // 远端公共前缀,便于一个桶给多台面板共用
+    deleteWithLocal: false,     // 本地按保留策略清理时,是否也删远端(默认不删)
+    // s3
+    endpoint: '', bucket: '', region: 'us-east-1', accessKey: '', secretKey: '', pathStyle: true,
+    // webdav
+    url: '', username: '', password: '',
+    // rclone
+    remote: '', path: '',
+  },
   notify: {
     enabled: false,
     webhookUrl: '',
@@ -55,6 +69,14 @@ settings.thresholds = {
   ...(settings.thresholds || {}),
 };
 
+settings.backupRemote = {
+  enabled: false, type: 's3', prefix: '', deleteWithLocal: false,
+  endpoint: '', bucket: '', region: 'us-east-1', accessKey: '', secretKey: '', pathStyle: true,
+  url: '', username: '', password: '',
+  remote: '', path: '',
+  ...(settings.backupRemote || {}),
+};
+
 settings.notify = {
   enabled: false, webhookUrl: '', discordUrl: '', telegramToken: '', telegramChatId: '',
   ...(settings.notify || {}),
@@ -65,7 +87,21 @@ settings.notify = {
 const save = () => writeJson(SETTINGS_FILE, settings);
 const get = () => settings;
 
+/* 口令回显用的占位符。异地备份的密钥不往响应里放明文:它比 webhook 地址
+   危险得多(能读写整个对象存储桶),而管理员在页面上并不需要看到它。
+   PUT 时原样传回来就表示"没改",见上面的 secretKey/password 处理。 */
+const MASK = '••••••••';
+
 const router = express.Router();
+
+/** 把异地备份里的口令换成掩码,其余字段照常返回 */
+function maskRemote(r) {
+  return {
+    ...r,
+    secretKey: r.secretKey ? MASK : '',
+    password: r.password ? MASK : '',
+  };
+}
 
 /* 普通用户只该看到影响自己的那几项。notify 里存着 webhook 地址和 Telegram
    Bot Token —— 之前这个接口对任何登录用户都全量返回,等于把推送凭据发给租户。 */
@@ -79,7 +115,9 @@ function publicView(s) {
   };
 }
 
-router.get('/', (req, res) => res.json(req.user.role === 'admin' ? settings : publicView(settings)));
+router.get('/', (req, res) => res.json(req.user.role === 'admin'
+  ? { ...settings, backupRemote: maskRemote(settings.backupRemote) }
+  : publicView(settings)));
 
 router.put('/', requireAdmin, (req, res) => {
   const b = req.body || {};
@@ -125,6 +163,30 @@ router.put('/', requireAdmin, (req, res) => {
     const n = parseInt(b[k], 10);
     if (Number.isFinite(n) && n >= 0 && n <= 3650) settings[k] = n;
   }
+  if (b.backupRemote && typeof b.backupRemote === 'object') {
+    const n = b.backupRemote;
+    const str = (v, max, cur) => (v === undefined ? cur : String(v || '').trim().slice(0, max));
+    const cur = settings.backupRemote;
+    settings.backupRemote = {
+      enabled: 'enabled' in n ? !!n.enabled : cur.enabled,
+      type: ['s3', 'webdav', 'rclone'].includes(n.type) ? n.type : cur.type,
+      prefix: str(n.prefix, 200, cur.prefix),
+      deleteWithLocal: 'deleteWithLocal' in n ? !!n.deleteWithLocal : cur.deleteWithLocal,
+      endpoint: str(n.endpoint, 300, cur.endpoint),
+      bucket: str(n.bucket, 200, cur.bucket),
+      region: str(n.region, 64, cur.region) || 'us-east-1',
+      accessKey: str(n.accessKey, 200, cur.accessKey),
+      // 口令类字段:前端回显的是掩码,原样传回来时保留旧值,
+      // 否则用户改个 bucket 就会把密钥抹成一串星号
+      secretKey: n.secretKey === MASK ? cur.secretKey : str(n.secretKey, 300, cur.secretKey),
+      pathStyle: 'pathStyle' in n ? !!n.pathStyle : cur.pathStyle,
+      url: str(n.url, 300, cur.url),
+      username: str(n.username, 200, cur.username),
+      password: n.password === MASK ? cur.password : str(n.password, 300, cur.password),
+      remote: str(n.remote, 100, cur.remote),
+      path: str(n.path, 300, cur.path),
+    };
+  }
   if (b.notify && typeof b.notify === 'object') {
     const n = b.notify;
     const str = (v, max) => String(v || '').trim().slice(0, max);
@@ -138,7 +200,7 @@ router.put('/', requireAdmin, (req, res) => {
     };
   }
   save();
-  res.json({ ok: true, settings });
+  res.json({ ok: true, settings: { ...settings, backupRemote: maskRemote(settings.backupRemote) } });
 });
 
 /* 测试推送:同步等结果,逐条回显哪个通道通了 */
@@ -147,6 +209,13 @@ router.post('/notify/test', requireAdmin, async (req, res) => {
   // 用请求体里的配置试,这样用户不用先保存再测
   const cfg = (req.body && req.body.notify) || settings.notify;
   res.json({ ok: true, results: await notify.test(cfg) });
+});
+
+/* 异地备份连通性自检:真传一个探针文件上去。
+   只 ping 通是不够的 —— 权限、桶名、路径这些只有写一次才知道。
+   用已保存的配置(而不是请求体),避免要求前端把密钥再发一遍。 */
+router.post('/backup-remote/test', requireAdmin, async (req, res) => {
+  res.json(await require('./remotebackup').test(settings.backupRemote));
 });
 
 module.exports = { get, router };

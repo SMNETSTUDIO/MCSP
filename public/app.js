@@ -2712,9 +2712,80 @@ async function loadSystem() {
   $('#sys-crash-win').value = t.crashWindowMin ?? 10;
   $('#sys-crash-max').value = t.crashMaxRestarts ?? 3;
   $('#sys-crash-delay').value = t.crashRestartDelaySec ?? 5;
+  renderRemoteBackup(s.backupRemote);
   renderNotify(s.notify);
   loadAudit();
 }
+
+/* ── 异地备份 ── */
+
+function renderRemoteBackup(r) {
+  r = r || {};
+  $('#rb-enabled').checked = !!r.enabled;
+  $('#rb-type').value = r.type || 's3';
+  $('#rb-prefix').value = r.prefix || '';
+  $('#rb-endpoint').value = r.endpoint || '';
+  $('#rb-bucket').value = r.bucket || '';
+  $('#rb-region').value = r.region || 'us-east-1';
+  $('#rb-ak').value = r.accessKey || '';
+  $('#rb-sk').value = r.secretKey || '';        // 已保存时后端给的是掩码
+  $('#rb-pathstyle').checked = r.pathStyle !== false;
+  $('#rb-url').value = r.url || '';
+  $('#rb-user').value = r.username || '';
+  $('#rb-pass').value = r.password || '';
+  const badge = $('#rb-status');
+  badge.textContent = r.enabled ? `已启用 · ${r.type}` : '未启用';
+  badge.className = `task-badge ${r.enabled ? 'on' : 'off'}`;
+  $('#rb-remote').value = r.remote || '';
+  $('#rb-path').value = r.path || '';
+  syncRemoteFields();
+}
+
+/** 只显示当前类型那组字段 —— 三组堆在一起没人分得清哪个该填 */
+function syncRemoteFields() {
+  const t = $('#rb-type').value;
+  $$('.rb-fields').forEach((el) => { el.hidden = el.dataset.rb !== t; });
+}
+$('#rb-type').addEventListener('change', syncRemoteFields);
+
+function remoteBody() {
+  return {
+    backupRemote: {
+      enabled: $('#rb-enabled').checked,
+      type: $('#rb-type').value,
+      prefix: $('#rb-prefix').value,
+      endpoint: $('#rb-endpoint').value,
+      bucket: $('#rb-bucket').value,
+      region: $('#rb-region').value,
+      accessKey: $('#rb-ak').value,
+      secretKey: $('#rb-sk').value,     // 掩码原样回传 = 不修改,后端认这个
+      pathStyle: $('#rb-pathstyle').checked,
+      url: $('#rb-url').value,
+      username: $('#rb-user').value,
+      password: $('#rb-pass').value,
+      remote: $('#rb-remote').value,
+      path: $('#rb-path').value,
+    },
+  };
+}
+
+$('#rb-save').addEventListener('click', async () => {
+  const r = await api('/settings', { method: 'PUT', body: remoteBody() });
+  if (!r.ok) return toast(r.error, true);
+  toast('异地备份配置已保存');
+  renderRemoteBackup(r.settings.backupRemote);
+});
+
+$('#rb-test').addEventListener('click', async () => {
+  // 用已保存的配置测,所以先存 —— 否则用户改完没点保存就点测试,测的是旧配置
+  const s = await api('/settings', { method: 'PUT', body: remoteBody() });
+  if (!s.ok) return toast(s.error, true);
+  renderRemoteBackup(s.settings.backupRemote);
+  toast('正在测试…');
+  const r = await api('/settings/backup-remote/test', { method: 'POST' });
+  if (r.ok) alert(`连通性正常。\n\n${r.note || ''}`);
+  else alert(`连接失败:\n\n${r.error}`);
+});
 
 /**
  * 强制 2FA 开关的可用性。后端已经硬拦了(没配 TOTP 就返回 400),

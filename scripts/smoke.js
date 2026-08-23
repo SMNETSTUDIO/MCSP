@@ -286,6 +286,44 @@ async function multiTenantSuite() {
     check('2FA policy: 被拒后确实没写进去', s.json.require2FA === false, String(s.json.require2FA));
   }
 
+  /* 异地备份(功能 6)。这里不连真的对象存储 —— 只验配置面的三件事:
+     校验拦得住、密钥不回显明文、掩码回传不会把密钥抹掉。
+     最后一条尤其要守:用户改个 bucket 就把 secretKey 存成一串圆点的话,
+     下次备份会静默传不上去,而页面上看着一切正常。 */
+  const rbSaved = (await req('GET', '/api/settings')).json.backupRemote;
+  r = await req('POST', '/api/settings/backup-remote/test');
+  check('remote backup: 未配置时测试给出原因',
+    r.json && r.json.ok === false && !!r.json.error, JSON.stringify(r.json));
+
+  r = await req('PUT', '/api/settings', {
+    backupRemote: { enabled: true, type: 's3', endpoint: 'https://s3.example.com',
+      bucket: 'b', accessKey: 'AK', secretKey: 'THE-REAL-SECRET', pathStyle: true },
+  });
+  check('remote backup: 保存后密钥不回显明文',
+    r.json.settings.backupRemote.secretKey !== 'THE-REAL-SECRET'
+    && r.json.settings.backupRemote.secretKey.length > 0,
+    JSON.stringify(r.json.settings.backupRemote.secretKey));
+  const mask = r.json.settings.backupRemote.secretKey;
+
+  // 掩码原样回传 = 不修改;此处只改 bucket
+  r = await req('PUT', '/api/settings', {
+    backupRemote: { enabled: true, type: 's3', endpoint: 'https://s3.example.com',
+      bucket: 'b2', accessKey: 'AK', secretKey: mask, pathStyle: true },
+  });
+  check('remote backup: 掩码回传不覆盖已存密钥', r.json.settings.backupRemote.bucket === 'b2');
+  r = await req('POST', '/api/settings/backup-remote/test');
+  // 连不上 s3.example.com 是预期的;关键是别报"缺少 secretKey"
+  check('remote backup: 密钥仍在(测试报的不是缺字段)',
+    r.json.ok === false && !/accessKey|secretKey/.test(r.json.error || ''), JSON.stringify(r.json));
+
+  r = await req('PUT', '/api/settings', { backupRemote: { enabled: true, type: 's3', endpoint: 'not-a-url' } });
+  r = await req('POST', '/api/settings/backup-remote/test');
+  check('remote backup: 非法 endpoint 被拦',
+    r.json.ok === false && /URL/.test(r.json.error || ''), JSON.stringify(r.json));
+
+  // 还原,别把测试配置留在别人的面板上
+  await req('PUT', '/api/settings', { backupRemote: { ...rbSaved, enabled: false, secretKey: mask, password: mask } });
+
   // 阈值校验:越界值必须被夹住而不是写进去
   r = await req('PUT', '/api/settings', { thresholds: { diskWarnPct: 5, crashWindowMin: 99999 } });
   const th = r.json && r.json.settings && r.json.settings.thresholds;

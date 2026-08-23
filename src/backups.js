@@ -154,6 +154,33 @@ function pruneBackups(inst) {
   return removed;
 }
 
+/**
+ * 异地上传(功能 6)。后台跑,失败只告警。
+ *
+ * 这里刻意不 await、也不把失败并进 createBackup 的返回值:本地备份已经
+ * 落盘成功了,远端传不上去是另一件事。绑在一起的话,一个过期的 access key
+ * 会让所有备份任务开始报"失败",而本地那份其实好好的 —— 那种告警看几次
+ * 就没人信了,真出事时反而被忽略。
+ */
+function uploadToRemote(inst, localPath, id) {
+  const cfg = settings.get().backupRemote;
+  if (!cfg || !cfg.enabled) return;
+  const remote = require('./remotebackup');
+  // 按实例分目录:几个实例的包混在一个桶里,出事时根本挑不出来
+  const key = `${inst.id}/${id}`;
+  inst.log('INFO', `[MCSP] 开始上传到异地备份 (${cfg.type}): ${key}`);
+  remote.upload(cfg, localPath, key).then(() => {
+    inst.log('INFO', `[MCSP] 异地备份上传完成: ${key}`);
+  }).catch((err) => {
+    inst.log('ERROR', `[MCSP] 异地备份上传失败: ${err.message}(本地备份不受影响)`);
+    notify.emit('backupFailed', {
+      title: `实例「${inst.name}」异地备份上传失败`,
+      text: `${cfg.type} 目标写入失败:${err.message}\n本地备份 ${id} 已正常生成,只是没能同步到异地。`,
+      dedupeKey: `remote-${inst.id}`,
+    });
+  });
+}
+
 /** 当前可追加增量的链:最近一次全量,且它的 .snar 还在 */
 function activeChain(inst) {
   const all = listBackups(inst);
@@ -214,6 +241,9 @@ function createBackup(inst, name, opts = {}) {
         const sz = (() => { try { return +(fs.statSync(out).size / 1048576).toFixed(1); } catch { return 0; } })();
         inst.log('INFO', `[MCSP] 备份完成: ${id} (${sz} MB)`);
         pruneBackups(inst);
+        // 本地这份已经成了,先把结果还给调用方;异地上传在后台继续。
+        // 绝不能让远端拖住备份接口 —— 几十 GB 走慢线路可能要几十分钟
+        uploadToRemote(inst, out, id);
         resolve({ ok: true, id, mode, sizeMB: sz });
       } else {
         inst.log('ERROR', `[MCSP] 备份失败 (tar exit ${code})`);

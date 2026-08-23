@@ -796,6 +796,62 @@
 
         <div class="card glass" style="margin-top:18px">
           <div class="card-title row-between">
+            <span>异地备份 <span class="task-badge off" id="rb-status">未启用</span></span>
+            <span>
+              <button class="icon-btn" id="rb-test">测试连通性</button>
+              <button class="btn btn-blue" id="rb-save">保存</button>
+            </span>
+          </div>
+          <div class="props-grid">
+            <div class="prop-row">
+              <label>启用</label>
+              <label class="switch prop-switch"><input type="checkbox" id="rb-enabled"><span class="slider"></span></label>
+            </div>
+            <div class="prop-row"><label>目标类型</label>
+              <select id="rb-type">
+                <option value="s3">S3 兼容(AWS / MinIO / R2 / B2 / OSS)</option>
+                <option value="webdav">WebDAV(Nextcloud / 坚果云 / 群晖)</option>
+                <option value="rclone">rclone(宿主机需已安装并配好 remote)</option>
+              </select>
+            </div>
+            <div class="prop-row"><label>公共前缀<span class="dim small">可留空</span></label><input id="rb-prefix" type="text" placeholder="如 mcsp/prod" /></div>
+          </div>
+
+          <div class="props-grid rb-fields" data-rb="s3" style="margin-top:10px">
+            <div class="prop-row"><label>Endpoint</label><input id="rb-endpoint" type="text" placeholder="https://s3.us-east-1.amazonaws.com" /></div>
+            <div class="prop-row"><label>Bucket</label><input id="rb-bucket" type="text" /></div>
+            <div class="prop-row"><label>Region</label><input id="rb-region" type="text" placeholder="us-east-1" /></div>
+            <div class="prop-row"><label>Access Key</label><input id="rb-ak" type="text" autocomplete="off" /></div>
+            <div class="prop-row"><label>Secret Key</label><input id="rb-sk" type="password" autocomplete="new-password" /></div>
+            <div class="prop-row">
+              <label>Path-style 寻址<span class="dim small">MinIO 等自建务必开启</span></label>
+              <label class="switch prop-switch"><input type="checkbox" id="rb-pathstyle"><span class="slider"></span></label>
+            </div>
+          </div>
+
+          <div class="props-grid rb-fields" data-rb="webdav" style="margin-top:10px" hidden>
+            <div class="prop-row"><label>WebDAV 地址</label><input id="rb-url" type="text" placeholder="https://nas.example.com/dav/backups" /></div>
+            <div class="prop-row"><label>用户名</label><input id="rb-user" type="text" autocomplete="off" /></div>
+            <div class="prop-row"><label>密码</label><input id="rb-pass" type="password" autocomplete="new-password" /></div>
+          </div>
+
+          <div class="props-grid rb-fields" data-rb="rclone" style="margin-top:10px" hidden>
+            <div class="prop-row"><label>Remote 名</label><input id="rb-remote" type="text" placeholder="rclone config 里那个名字,如 gdrive" /></div>
+            <div class="prop-row"><label>远端路径</label><input id="rb-path" type="text" placeholder="如 backups/mcsp" /></div>
+          </div>
+
+          <div class="dim small" style="margin-top:14px">
+            备份现在和被备份的东西在同一块盘上 —— 盘坏了、机器被回收,备份跟着一起没。
+            开启后每次备份成功都会把包<b>在后台</b>传一份到异地,按 <code>&lt;实例 ID&gt;/&lt;文件名&gt;</code> 分目录。<br>
+            <b>上传失败不影响本地备份</b>:本地那份已经做完了,传不上去只会告警。
+            反过来也一样——异地上传不会拖慢备份接口,几十 GB 走慢线路可能要几十分钟。<br>
+            密钥保存后不再回显明文(显示为 ••••••••),原样提交表示不修改。
+            「测试连通性」会用<b>已保存</b>的配置真传一个探针文件上去 —— 只 ping 通说明不了权限和桶名对不对。
+          </div>
+        </div>
+
+        <div class="card glass" style="margin-top:18px">
+          <div class="card-title row-between">
             <span>面板配置备份 <span class="dim small">面板自身的配置,不含世界与插件</span></span>
             <span>
               <button class="icon-btn" id="pb-export">导出</button>
