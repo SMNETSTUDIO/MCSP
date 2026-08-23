@@ -15,6 +15,8 @@
   --glass-strong: rgba(255, 255, 255, 0.11);
   --glass-border: rgba(255, 255, 255, 0.16);
   --glass-inner: rgba(255, 255, 255, 0.06);
+  --glass-base: rgba(10, 12, 19, 0.62);      /* 玻璃底色,压住背后极光的色偏 */
+  --surface-solid: rgba(8, 10, 16, 0.92);    /* 日志/表格这类密集正文的实底 */
   --text: rgba(255, 255, 255, 0.92);
   --text-dim: rgba(255, 255, 255, 0.52);
   --page-bg: #0b0d14;
@@ -124,18 +126,31 @@ body {
 
 /* ── glass primitives ── */
 
+/* 玻璃是一层"材质",不是一块透明片。
+   原来只有 7% 白 + saturate(190%):saturate 不止模糊背景,还把极光的颜色
+   按比例放大,于是卡片被涂上流动的蓝/绿/紫,内容对比度随动画来回变 ——
+   日志和文件名首当其冲。现在垫一层 --glass-base 定住底色,saturate 收到
+   130%,极光只留下"背后有光"的暗示,不再决定文字读不读得清。 */
 .glass {
   background:
     linear-gradient(133deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(255, 255, 255, 0) 60%, rgba(255, 255, 255, 0.04) 100%),
-    var(--glass);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
-  backdrop-filter: blur(28px) saturate(190%);
+    var(--glass),
+    var(--glass-base);
+  -webkit-backdrop-filter: blur(28px) saturate(130%);
+  backdrop-filter: blur(28px) saturate(130%);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius);
   box-shadow:
     0 10px 36px rgba(0, 0, 0, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/* 密集正文区(日志、文件表、数据表):这里要的是稳定的对比度,不是氛围。
+   玻璃质感留在外层卡片上,内容本身坐在实底上。 */
+.surface-solid {
+  background: var(--surface-solid);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .glass-inner {
@@ -413,7 +428,8 @@ body {
 .console-card { display: flex; flex-direction: column; height: 100%; }
 .console {
   flex: 1; overflow-y: auto;
-  background: rgba(0, 0, 0, 0.35);
+  /* 等宽日志是全站最需要稳定对比度的地方,不让极光参与 */
+  background: var(--surface-solid);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-sm);
   padding: 16px 18px;
@@ -993,10 +1009,13 @@ body {
   --glass-strong: rgba(255, 255, 255, 0.75);
   --glass-border: rgba(255, 255, 255, 0.75);
   --glass-inner: rgba(255, 255, 255, 0.55);
+  --glass-base: rgba(255, 255, 255, 0.55);
+  --surface-solid: rgba(255, 255, 255, 0.94);
   --text: #1d1d1f;
   --text-dim: rgba(60, 60, 67, 0.62);
   --page-bg: #e8ecf4;
 }
+[data-theme="light"] .surface-solid { border-color: rgba(0, 0, 0, 0.08); }
 [data-theme="light"] .glass {
   background:
     linear-gradient(133deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0.35) 42%, rgba(255, 255, 255, 0.2) 60%, rgba(255, 255, 255, 0.45) 100%),
