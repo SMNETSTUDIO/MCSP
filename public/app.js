@@ -2656,6 +2656,7 @@ async function loadSystem() {
   $('#sys-bk-days').value = s.backupKeepDays ?? 30;
   $('#sys-announcement').value = s.announcement || '';
   $('#sys-2fa').checked = !!s.require2FA;
+  render2faPolicy(!!s.require2FA);
   const t = s.thresholds || {};
   $('#sys-disk-pct').value = t.diskWarnPct ?? 90;
   $('#sys-crash-win').value = t.crashWindowMin ?? 10;
@@ -2665,12 +2666,21 @@ async function loadSystem() {
   loadAudit();
 }
 
+/**
+ * 强制 2FA 开关的可用性。后端已经硬拦了(没配 TOTP 就返回 400),
+ * 这里只是别让用户白点一次 —— 直接把开关禁掉并说清楚为什么。
+ * 策略已经开着时不禁用:那时关闭是逃生方向,永远要留着。
+ */
+function render2faPolicy(enabled) {
+  const box = $('#sys-2fa');
+  const hint = $('#sys-2fa-hint');
+  const blocked = !enabled && me && !me.twoFactor;
+  box.disabled = blocked;
+  if (blocked) box.checked = false;
+  hint.hidden = !blocked;
+}
+
 $('#sys-save').addEventListener('click', async () => {
-  // 自己还没配 2FA 就打开强制开关 = 把自己锁在门外(设置页本身也会被拦)。
-  // 这个后果不可逆到"得去改磁盘上的 JSON",值得挡一道确认
-  if ($('#sys-2fa').checked && me && !me.twoFactor
-      && !confirm('你自己还没有启用两步验证。开启后你会被立刻挡在面板外,只能先去「账号安全」配置 TOTP,'
-                  + '而且没法再从面板关掉这个开关。\n\n确定继续吗?')) return;
   const r = await api('/settings', {
     method: 'PUT',
     body: {

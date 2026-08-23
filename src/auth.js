@@ -326,6 +326,15 @@ router.post('/2fa/disable', requireAuth, (req, res) => {
   if (!verifyPassword(String((req.body || {}).password || ''), user.password)) {
     return res.status(400).json({ ok: false, error: '密码不正确' });
   }
+  // 强制开关开着的时候关掉自己的 2FA,是通往同一个死锁的另一扇门:
+  // 关完下一个请求就会被 requireTwoFactor 拦住,而系统设置页也打不开,
+  // 没法再去关那个开关。先关策略,再关自己的 2FA。
+  if (require('./settings').get().require2FA) {
+    return res.status(400).json({
+      ok: false, code: 'policy_2fa_required',
+      error: '面板已开启「强制两步验证」,不能关闭自己的 TOTP。请先在系统设置里关掉该策略。',
+    });
+  }
   user.totp = { enabled: false, secret: '', recovery: [] };
   saveUsers();
   res.json({ ok: true });

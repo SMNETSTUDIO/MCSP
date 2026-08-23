@@ -13,7 +13,7 @@ const path = require('path');
 const express = require('express');
 const { DATA_DIR } = require('./config');
 const { readJson, writeJson } = require('./utils');
-const { requireAdmin } = require('./auth');
+const { requireAdmin, users } = require('./auth');
 
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
@@ -84,7 +84,25 @@ router.get('/', (req, res) => res.json(req.user.role === 'admin' ? settings : pu
 router.put('/', requireAdmin, (req, res) => {
   const b = req.body || {};
   if ('registrationEnabled' in b) settings.registrationEnabled = !!b.registrationEnabled;
-  if ('require2FA' in b) settings.require2FA = !!b.require2FA;
+  /* 强制两步验证:自己没配 TOTP 就不许打开。
+     开关一旦打开,连管理员自己都会被 requireTwoFactor 挡在门外,而系统设置页
+     本身也在拦截范围内 —— 也就是说没配 2FA 的人打开它,等于把自己锁死,
+     只能去改磁盘上的 JSON 再重启。原来这里只有前端一个 confirm 弹窗,
+     点「确定」就能把自己锁出去,API 直连更是毫无阻拦。改成后端硬拦。
+     关闭不设限制:那是逃生方向,永远该放行。 */
+  if ('require2FA' in b) {
+    const want = !!b.require2FA;
+    if (want && !settings.require2FA) {
+      const me = users.find((u) => u.username === req.user.username);
+      if (!(me && me.totp && me.totp.enabled)) {
+        return res.status(400).json({
+          ok: false, code: 'self_2fa_required',
+          error: '你自己还没有启用两步验证。请先在「账号安全」中配置 TOTP,否则开启后你会被锁在面板外。',
+        });
+      }
+    }
+    settings.require2FA = want;
+  }
   if (b.thresholds && typeof b.thresholds === 'object') {
     // 每项都有下限:磁盘告警线设成 5% 会天天响,窗口设成 0 分钟等于永不计数
     const lim = {

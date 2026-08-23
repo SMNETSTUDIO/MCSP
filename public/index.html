@@ -747,7 +747,11 @@
               <label class="switch prop-switch"><input type="checkbox" id="sys-reg"><span class="slider"></span></label>
             </div>
             <div class="prop-row">
-              <label>强制两步验证<span class="dim small">所有账号(含你自己)</span></label>
+              <label>强制两步验证<span class="dim small">所有账号(含你自己)</span>
+                <span class="dim small" id="sys-2fa-hint" hidden style="color:#e5c07b">
+                  ⚠ 你自己还没启用 TOTP,无法开启 —— 请先到「账号安全」配置
+                </span>
+              </label>
               <label class="switch prop-switch"><input type="checkbox" id="sys-2fa"><span class="slider"></span></label>
             </div>
             <div class="prop-row"><label>备份保留份数(每实例,0 = 不限)</label><input id="sys-bk-count" type="number" min="0" max="3650" /></div>
@@ -767,10 +771,12 @@
             备份保留策略在每次备份成功后执行,两个条件取并集(任一超限即删)。最新的一份永远保留,
             所以把天数调得很短也不会把刚做完的备份删掉。<b>不影响手动删除</b>,也不会去动历史遗留的备份 ——
             它们会在下次备份时一并按策略清理。<br>
-            <b>强制两步验证</b>会连你自己一起挡住:没配 TOTP 的账号除了「账号安全」页什么都打不开。
-            <b>开启前请先给自己配好 2FA</b> —— 开启后系统设置页本身也会被拦,没法再从面板关掉
-            (真被锁在外面:改 <code>data/settings.json</code> 的 <code>require2FA</code> 为 false 再重启面板)。
-            API Token 不受此开关影响,否则开启的瞬间所有脚本都会断。<br>
+            <b>强制两步验证</b>默认关闭,会连你自己一起挡住:没配 TOTP 的账号除了「账号安全」页什么都打不开。
+            <b>你自己没启用 TOTP 时开关是禁用的</b>(后端同样会拒绝),因为开启后系统设置页本身也会被拦,
+            没法再从面板关掉 —— 那就只能去改磁盘上的 JSON 了。同理,策略开着时不允许关闭自己的 TOTP,
+            要关请先关策略。<br>
+            API Token 不受此开关影响,否则开启的瞬间所有脚本都会断;签发新 Token 需要网页会话,
+            所以没配 2FA 的人也绕不过去。<br>
             崩溃阈值按实例类型调:重度模组服启动慢、崩得勤,3 次/10 分钟容易误判成"重启风暴"而停手。
           </div>
         </div>

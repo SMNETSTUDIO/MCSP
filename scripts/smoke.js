@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 /**
  * 冒烟测试:对运行中的面板做一轮真实 API 回归。
- * 用法: node scripts/smoke.js [baseUrl] [username] [password]
+ * 用法: node scripts/smoke.js [baseUrl] [username] [password] [totpSecret]
  * 默认: http://localhost:3000 admin admin123
+ *
+ * totpSecret 是可选的 Base32 密钥:测试账号开了两步验证时必须给,
+ * 否则登录会卡在 need2fa 上、后面每一条用例都跟着假失败。
+ * 开了「强制两步验证」的面板尤其需要 —— 那时所有账号都必须有 TOTP。
  */
 const BASE = process.argv[2] || 'http://localhost:3000';
 const USER = process.argv[3] || 'admin';
 const PASS = process.argv[4] || 'admin123';
+const TOTP_SECRET = process.argv[5] || process.env.MCSP_SMOKE_TOTP || '';
 
 let cookie = '';
 let passed = 0, failed = 0;
@@ -23,6 +28,17 @@ async function req(method, path, body) {
   let json = null;
   try { json = await res.json(); } catch {}
   return { status: res.status, json };
+}
+
+/** 当前时间片的 TOTP 码;没配密钥就返回 undefined(登录接口会忽略它) */
+function totpNow() {
+  if (!TOTP_SECRET) return undefined;
+  try {
+    const totp = require('../src/totp');
+    return totp.codeAt(TOTP_SECRET, Math.floor(Date.now() / 1000 / totp.PERIOD));
+  } catch {
+    return undefined;    // 从面板目录外面跑时拿不到模块,不该因此崩掉
+  }
 }
 
 function check(name, cond, detail = '') {
@@ -131,6 +147,27 @@ async function multiTenantSuite() {
   check('panel backup: 拒绝无管理员的备份', r.status === 400 && /管理员/.test(r.json.error || ''),
     JSON.stringify(r.json));
 
+  /* 强制 2FA 的自锁防护。跑这段时 admin 通常没配 TOTP,所以开启必须被拒 ——
+     这条用例的价值在于它挡的是"点一下就把自己锁在面板外"的不可逆操作。
+     如果当前 admin 恰好配了 TOTP,开启会成功,那就换个方向验证并立刻关回去。 */
+  r = await req('GET', '/api/auth/me');
+  const selfHas2FA = !!(r.json && r.json.user && r.json.user.twoFactor);
+  r = await req('PUT', '/api/settings', { require2FA: true });
+  if (selfHas2FA) {
+    check('2FA policy: 自己有 TOTP 时可开启', r.status === 200 && r.json.settings.require2FA === true);
+    // 策略开着时不许关掉自己的 TOTP(通往同一个死锁的另一扇门)
+    const d = await req('POST', '/api/auth/2fa/disable', { password: PASS });
+    check('2FA policy: 策略开启时禁止关闭自己的 TOTP',
+      d.status === 400 && d.json.code === 'policy_2fa_required', JSON.stringify(d.json));
+    r = await req('PUT', '/api/settings', { require2FA: false });
+    check('2FA policy: 关闭永远放行', r.status === 200 && r.json.settings.require2FA === false);
+  } else {
+    check('2FA policy: 自己没 TOTP 时禁止开启',
+      r.status === 400 && r.json.code === 'self_2fa_required', JSON.stringify(r.json));
+    const s = await req('GET', '/api/settings');
+    check('2FA policy: 被拒后确实没写进去', s.json.require2FA === false, String(s.json.require2FA));
+  }
+
   // 阈值校验:越界值必须被夹住而不是写进去
   r = await req('PUT', '/api/settings', { thresholds: { diskWarnPct: 5, crashWindowMin: 99999 } });
   const th = r.json && r.json.settings && r.json.settings.thresholds;
@@ -228,9 +265,14 @@ async function uniqueNameRoundtrip() {
   r = await req('POST', '/api/auth/login', { username: USER, password: 'wrong-password' });
   check('bad login rejected', r.status === 401);
 
-  // 登录
+  // 登录。账号开了 2FA 时补一个当前 TOTP 码 —— 没给密钥就如实报错,
+  // 别让后面几十条用例都挂在一个"其实是没登上"的原因上
   cookie = '';
-  r = await req('POST', '/api/auth/login', { username: USER, password: PASS });
+  r = await req('POST', '/api/auth/login', { username: USER, password: PASS, code: totpNow() });
+  if (r.json && r.json.need2fa && !TOTP_SECRET) {
+    console.error('  ✘ login 需要两步验证码:请把 TOTP 密钥作为第 4 个参数传入'
+      + '(node scripts/smoke.js <url> <user> <pass> <base32secret>)');
+  }
   check('login', r.status === 200 && r.json.ok && !!cookie, JSON.stringify(r.json));
   const isAdmin = r.json && r.json.user && r.json.user.role === 'admin';
 

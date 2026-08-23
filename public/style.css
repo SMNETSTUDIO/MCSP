@@ -636,6 +636,10 @@ body {
 }
 .switch input:checked + .slider { background: var(--green); }
 .switch input:checked + .slider::before { transform: translateX(19px); }
+/* 禁用态:和 .btn:disabled / .icon-btn:disabled 一个观感。
+   开关原本没有禁用样式,不加的话「强制两步验证」被禁时看着还能点 */
+.switch:has(input:disabled) { cursor: not-allowed; }
+.switch input:disabled + .slider { opacity: 0.35; }
 
 /* ── backups ── */
 
