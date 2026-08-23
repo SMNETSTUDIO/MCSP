@@ -27,11 +27,35 @@
   --radius: 22px;
   --radius-sm: 14px;
   font-size: 15px;
+  color-scheme: dark;      /* 原生控件(滚动条、下拉箭头、日期选择器)跟着切暗色 */
 }
+[data-theme="light"] { color-scheme: light; }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body { height: 100%; }
+
+/* 输入控件基线。
+   此前所有 input 样式都挂在 .field-col / .prop-row / .task-form 这类容器上,
+   容器之外的输入框(协作者添加、白名单添加等)直接掉回浏览器默认的白底黑字 ——
+   在暗色面板上是一块刺眼的白。这里给全局兜个底,容器样式仍可覆盖。
+   color-scheme 让浏览器把滚动条、日期选择器、下拉箭头也切到暗色。 */
+input, select, textarea {
+  font: inherit;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 7px 10px;
+  outline: none;
+}
+input::placeholder, textarea::placeholder { color: var(--text-dim); }
+select option { background: #1c1c27; color: var(--text); }
+/* 勾选框不适用上面那套,交还给浏览器并只染主题色 */
+input[type="checkbox"], input[type="radio"] {
+  padding: 0; border: 0; border-radius: 0; background: none;
+  accent-color: rgb(var(--acc-rgb));
+}
 
 /* 键盘焦点。此前全站没有一条 :focus-visible,UA 默认轮廓是近黑色 ——
    在深色面板上等于不可见,用 Tab 导航时完全不知道自己在哪。
