@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>接受邀请 — MCSP</title>
+  <script>
+    /* 和 login.html 同一套:在首帧前把主题定下来,避免闪白 */
+    (function () {
+      try {
+        var a = JSON.parse(localStorage.getItem('mcsp_appearance') || '{}');
+        var t = a.theme || 'dark';
+        if (t === 'auto') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = t;
+        document.documentElement.dataset.style = a.style || 'pixel';
+        document.documentElement.dataset.bg = a.bg || 'aurora';
+        if (a.accent) document.documentElement.style.setProperty('--acc-rgb', a.accent);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'><rect width='16' height='16' fill='%236d4b2d'/><rect width='16' height='5' fill='%2355a848'/></svg>" />
+  <style>
+    body { overflow: hidden; }
+    .login-scene { height: 100vh; display: grid; place-items: center; }
+    .login-stack { width: min(92vw, 380px); }
+    .login-card { padding: 26px 24px; }
+    .login-card h1 { margin: 0 0 4px; font-size: 26px; }
+    .login-sub { font-size: 13px; opacity: .75; margin-bottom: 18px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12px; opacity: .8; margin-bottom: 6px; }
+    .field input { width: 100%; }
+    .login-btn { width: 100%; margin-top: 4px; }
+    .login-error { color: #ff9d96; font-size: 13px; margin-top: 12px; min-height: 18px; }
+    .invite-meta { font-size: 12px; opacity: .75; margin-bottom: 16px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="bg">
+    <div class="blob b1"></div><div class="blob b2"></div>
+    <div class="blob b3"></div><div class="blob b4"></div>
+    <div class="noise"></div>
+  </div>
+
+  <div class="login-scene">
+    <div class="login-stack">
+      <form class="login-card glass" id="form" hidden>
+        <h1>接受邀请</h1>
+        <div class="login-sub">创建你的 MCSP 账号</div>
+        <div class="invite-meta" id="meta"></div>
+        <div class="field">
+          <label for="username">用户名</label>
+          <input id="username" autocomplete="username" autofocus required
+                 placeholder="2-24 位字母、数字、. _ -" />
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" type="password" autocomplete="new-password" required placeholder="至少 6 位" />
+        </div>
+        <div class="field">
+          <label for="password2">确认密码</label>
+          <input id="password2" type="password" autocomplete="new-password" required />
+        </div>
+        <button class="btn btn-blue login-btn" type="submit" id="btn">创建账号并登录</button>
+        <div class="login-error" id="err"></div>
+      </form>
+
+      <div class="login-card glass" id="dead" hidden>
+        <h1>邀请不可用</h1>
+        <div class="login-sub" id="dead-msg"></div>
+        <a class="btn btn-ghost" href="/login" style="width:100%;display:block;text-align:center">去登录</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const token = location.pathname.split('/').pop();
+    const $ = (s) => document.querySelector(s);
+
+    function dead(msg) {
+      $('#form').hidden = true;
+      $('#dead').hidden = false;
+      $('#dead-msg').textContent = msg;
+    }
+
+    (async function () {
+      try {
+        const r = await (await fetch(`/api/auth/invite/${encodeURIComponent(token)}`)).json();
+        if (!r.ok) return dead(r.error);
+        const bits = [`由 ${r.invitedBy} 邀请`];
+        if (r.note) bits.push(r.note);
+        if (r.expiresAt) bits.push(`链接有效期至 ${new Date(r.expiresAt).toLocaleString()}`);
+        $('#meta').textContent = bits.join(' · ');
+        $('#form').hidden = false;
+      } catch (e) {
+        dead(`无法校验邀请:${e.message}`);
+      }
+    })();
+
+    $('#form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      $('#err').textContent = '';
+      if ($('#password').value !== $('#password2').value) {
+        $('#err').textContent = '两次输入的密码不一致';
+        return;
+      }
+      $('#btn').disabled = true;
+      try {
+        const r = await (await fetch(`/api/auth/invite/${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: $('#username').value, password: $('#password').value }),
+        })).json();
+        if (r.ok) { location.href = '/'; return; }
+        $('#err').textContent = r.error;
+      } catch (e) {
+        $('#err').textContent = `注册失败:${e.message}`;
+      }
+      $('#btn').disabled = false;
+    });
+  </script>
+</body>
+</html>

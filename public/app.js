@@ -96,6 +96,29 @@ function toast(msg, isErr = false) {
   el._t = setTimeout(() => el.classList.remove('show'), 2600);
 }
 
+/**
+ * 复制到剪贴板。navigator.clipboard 只在 https / localhost 下可用 ——
+ * 面板经常是 http://内网IP:3000 这么开的,那里它直接抛异常。
+ * 回落到临时 textarea + execCommand,老办法但到处都能用。
+ */
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      return ok;
+    } catch { return false; }
+  }
+}
+
 function fmtUptime(ms) {
   if (!ms) return '—';
   const s = Math.floor(ms / 1000);
@@ -261,6 +284,30 @@ function applyDashboardStats(inst) {
   $('#bar-cpu').style.width = Math.min(100, inst.metrics.cpu) + '%';
   $('#stat-ram').innerHTML = `${inst.metrics.ram} <span class="dim small">/ ${inst.metrics.ramMax} MB</span>`;
   $('#bar-ram').style.width = Math.min(100, (inst.metrics.ram / inst.metrics.ramMax) * 100) + '%';
+  renderTps(inst);
+}
+
+/**
+ * TPS 格子。拿不到就如实显示"需要 RCON"——
+ * 编一个 20.0 出来比不显示更糟:用户会以为服务器很健康。
+ */
+function renderTps(inst) {
+  const el = $('#stat-tps');
+  const bar = $('#bar-tps');
+  if (!el) return;
+  if (inst.tps === null || inst.tps === undefined) {
+    el.innerHTML = inst.state === 'running'
+      ? '<span class="dim small">需要 RCON</span>'
+      : '—';
+    bar.style.width = '0%';
+    return;
+  }
+  // 20 是满速;低于 18 明显掉帧,低于 15 已经很难玩了
+  const color = inst.tps >= 18 ? 'var(--green)' : (inst.tps >= 15 ? '#e5c07b' : '#ff9d96');
+  el.innerHTML = `<span style="color:${color}">${inst.tps.toFixed(1)}</span>`
+    + (inst.mspt != null ? ` <span class="dim small">${inst.mspt} ms/t</span>` : '');
+  bar.style.width = Math.min(100, (inst.tps / 20) * 100) + '%';
+  bar.style.background = color;
 }
 
 setInterval(() => {
@@ -847,6 +894,7 @@ $$('.chip[data-cmd]').forEach((c) =>
 /* ───────── players ───────── */
 
 async function loadPlayers() {
+  loadPlaytime();
   const d = await iapi('/players');
   $('#pl-count').textContent = d.online.length;
 
@@ -2079,6 +2127,42 @@ $('#backup-create').addEventListener('click', async () => {
   if (r.ok) { toast('备份已创建'); loadBackups(); }
 });
 
+/* ───────── 在线时长 ───────── */
+
+/** 时长文案:3 天 4 小时 / 5 小时 12 分 / 8 分钟 —— 秒级对这个场景没意义 */
+function fmtDuration(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时 ${m % 60} 分`;
+  return `${Math.floor(h / 24)} 天 ${h % 24} 小时`;
+}
+
+async function loadPlaytime() {
+  const r = await iapi('/playtime');
+  const rows = r.players || [];
+  const box = $('#playtime-list');
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty">还没有记录。玩家进出服务器后会在这里累计。</div>';
+    return;
+  }
+  const max = rows[0].totalMs || 1;
+  box.innerHTML = rows.slice(0, 50).map((p) => `
+    <div class="disk-row">
+      <div class="d-name">${p.online ? '<span style="color:var(--green)">●</span> ' : ''}${escapeHtml(p.name)}</div>
+      <div class="d-bar"><i style="width:${Math.max(2, Math.round((p.totalMs / max) * 100))}%"></i></div>
+      <div class="d-size">${fmtDuration(p.totalMs)}</div>
+      <div class="d-detail dim small">${p.sessions} 次 · 最后 ${p.lastSeen ? fmtAgo(p.lastSeen) : '—'}</div>
+    </div>`).join('');
+}
+
+$('#pt-reset').addEventListener('click', async () => {
+  if (!confirm('清空这个实例的所有在线时长统计?此操作不可撤销。')) return;
+  await iapi('/playtime', { method: 'DELETE' });
+  toast('时长统计已重置');
+  loadPlaytime();
+});
+
 /* ───────── 崩溃现场 ───────── */
 
 async function loadCrashes() {
@@ -2312,7 +2396,68 @@ $('#og-save').addEventListener('click', async () => {
 let userPage = 1;
 const USER_PAGE_SIZE = 10;
 
+/* ── 邀请链接 ── */
+
+const INV_STATUS = { live: ['可用', 'on'], used: ['已使用', 'off'], expired: ['已过期', 'off'] };
+
+async function loadInvites() {
+  const r = await api('/users/invites/list');
+  const rows = r.invites || [];
+  $('#invite-list').innerHTML = rows.length ? rows.map((i) => {
+    const [label, cls] = INV_STATUS[i.status] || INV_STATUS.expired;
+    const url = `${location.origin}/invite/${i.token}`;
+    return `
+      <div class="backup-item">
+        <div>
+          <div class="backup-name">
+            <span class="task-badge ${cls}">${label}</span>
+            ${i.note ? escapeHtml(i.note) : '<span class="dim">无备注</span>'}
+          </div>
+          <div class="backup-meta">
+            ${i.createdBy} 创建于 ${fmtAgo(i.createdAt)}
+            · ${i.expiresAt ? `到期 ${new Date(i.expiresAt).toLocaleString()}` : '永不过期'}
+            ${i.usedBy ? `· 已被 <b>${escapeHtml(i.usedBy)}</b> 使用` : ''}
+          </div>
+        </div>
+        <div class="spacer"></div>
+        ${i.status === 'live' ? `<button class="icon-btn" data-invcopy="${url}">复制链接</button>` : ''}
+        <button class="icon-btn danger" data-invdel="${i.token}">删除</button>
+      </div>`;
+  }).join('') : '<div class="empty">还没有邀请链接</div>';
+}
+
+$('#inv-create').addEventListener('click', async () => {
+  const r = await api('/users/invites', {
+    method: 'POST',
+    body: {
+      note: $('#inv-note').value,
+      expiresInHours: $('#inv-hours').value === '' ? 168 : parseInt($('#inv-hours').value, 10),
+      limits: {
+        maxInstances: $('#inv-lim-inst').value, maxMemMB: $('#inv-lim-mem').value,
+        maxCpuCores: $('#inv-lim-cpu').value, maxDiskMB: $('#inv-lim-disk').value,
+      },
+    },
+  });
+  if (!r.ok) return toast(r.error, true);
+  const url = `${location.origin}/invite/${r.token}`;
+  await copyText(url);
+  toast('邀请链接已生成并复制到剪贴板');
+  ['inv-note', 'inv-hours'].forEach((id) => { $('#' + id).value = ''; });
+  loadInvites();
+});
+
+$('#invite-list').addEventListener('click', async (e) => {
+  const copy = e.target.closest('[data-invcopy]');
+  if (copy) { await copyText(copy.dataset.invcopy); return toast('已复制'); }
+  const del = e.target.closest('[data-invdel]');
+  if (!del) return;
+  if (!confirm('删除这条邀请记录?已使用的记录删掉后就查不到是谁邀请的了。')) return;
+  await api(`/users/invites/${del.dataset.invdel}`, { method: 'DELETE' });
+  loadInvites();
+});
+
 async function loadUsers() {
+  loadInvites();
   const list = await api('/users');
   const pages = Math.max(1, Math.ceil(list.length / USER_PAGE_SIZE));
   if (userPage > pages) userPage = pages;

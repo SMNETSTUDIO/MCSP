@@ -4,6 +4,7 @@ const express = require('express');
 const { users, saveUsers, hashPassword, requireAdmin, dropUserSessions } = require('../auth');
 const { instances } = require('../registry');
 const disk = require('../disk');
+const invites = require('../invites');
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -59,6 +60,27 @@ router.post('/', (req, res) => {
   });
   saveUsers();
   res.json({ ok: true });
+});
+
+/* ── 邀请链接(功能 10)。仅管理员签发,注册端点在 auth.js(公开) ── */
+
+router.get('/invites/list', (req, res) => res.json({ ok: true, invites: invites.list() }));
+
+router.post('/invites', (req, res) => {
+  const b = req.body || {};
+  const inv = invites.create({
+    createdBy: req.user.username,
+    expiresInHours: b.expiresInHours,
+    // 邀请只能建普通用户,所以配额一定要有 —— 走和手动建号同一套 sanitize,
+    // 免得出现"从邀请进来的人不受配额约束"这种口子
+    limits: sanitizeLimits(b.limits),
+    note: b.note,
+  });
+  res.json({ ok: true, token: inv.token, expiresAt: inv.expiresAt });
+});
+
+router.delete('/invites/:token', (req, res) => {
+  res.json({ ok: invites.revoke(req.params.token) });
 });
 
 /* 调整普通用户的资源配额(不影响已在运行的实例,重启后生效) */

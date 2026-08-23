@@ -209,6 +209,12 @@
             <div class="stat-value" id="stat-ram">0 <span class="dim small">MB</span></div>
             <div class="stat-foot"><div class="bar"><i id="bar-ram"></i></div></div>
           </div>
+          <div class="card glass stat">
+            <div class="stat-chip chip-tps"><svg class="ico" aria-hidden="true"><use href="#i-activity"/></svg></div>
+            <div class="stat-label">TPS</div>
+            <div class="stat-value" id="stat-tps">—</div>
+            <div class="stat-foot"><div class="bar"><i id="bar-tps"></i></div></div>
+          </div>
         </div>
 
         <div class="dash-row">
@@ -274,6 +280,13 @@
             <div id="player-list" class="player-list"></div>
           </div>
           <div class="stack">
+            <div class="card glass">
+              <div class="card-title row-between">
+                <span>在线时长 <span class="dim small">按进出服记录累计</span></span>
+                <button class="icon-btn danger" id="pt-reset">重置</button>
+              </div>
+              <div id="playtime-list"></div>
+            </div>
             <div class="card glass">
               <h2 class="card-title">封禁列表</h2>
               <div id="ban-list" class="tag-list"></div>
@@ -689,6 +702,26 @@
             <input id="user-lim-disk" type="number" min="0" step="1024" placeholder="磁盘配额 MB(默认 20480,0=不限)" />
           </div>
           <div class="dim small" style="margin-top:10px">普通用户只能看到自己的实例,管理员不受配额限制。内存按全部实例 -Xmx 之和计,CPU 在启动时绑核,磁盘含实例目录与备份。</div>
+        </div>
+        <div class="card glass" style="margin-top:18px">
+          <h2 class="card-title">邀请链接 <span class="dim small">一次性,自带配额,不受「开放注册」影响</span></h2>
+          <div class="task-form">
+            <input id="inv-note" type="text" placeholder="备注(给谁用的,可留空)" />
+            <input id="inv-hours" type="number" min="0" max="8760" placeholder="有效期小时(默认 168,0=永久)" />
+            <button class="btn btn-blue" id="inv-create">生成链接</button>
+          </div>
+          <div class="task-form" style="margin-top:10px">
+            <input id="inv-lim-inst" type="number" min="1" max="12" placeholder="实例数上限(默认 1)" />
+            <input id="inv-lim-mem" type="number" min="512" max="65536" step="256" placeholder="内存配额 MB(默认 2048)" />
+            <input id="inv-lim-cpu" type="number" min="1" placeholder="CPU 核数(默认 2)" />
+            <input id="inv-lim-disk" type="number" min="0" step="1024" placeholder="磁盘配额 MB(默认 20480)" />
+          </div>
+          <div id="invite-list" style="margin-top:12px"></div>
+          <div class="dim small" style="margin-top:10px">
+            链接本身就是凭据 —— 拿到的人可以直接建号,所以别发到公开频道。
+            邀请只能创建<b>普通用户</b>,配额在生成时就固定下来。已使用/已过期的记录会保留,
+            用来追溯谁邀请了谁。
+          </div>
         </div>
         <div class="card glass" style="margin-top:18px">
           <h2 class="card-title">用户列表 <span class="dim small" id="user-count"></span></h2>

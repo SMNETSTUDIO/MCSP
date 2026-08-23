@@ -15,6 +15,7 @@ const { authlibJarPath, authlibInstalled } = require('./authlib');
 const { mcPing } = require('./mcping');
 const bus = require('./bus');
 const notify = require('./notify');
+const playtime = require('./playtime');
 
 /* taskset 可用性(util-linux,Linux 标配);缺失时 CPU 限核降级为不限制 */
 const TASKSET_OK = (() => { try { return spawnSync('taskset', ['-V']).status === 0; } catch { return false; } })();
@@ -33,6 +34,37 @@ function crashCfg() {
     maxRestarts: t.crashMaxRestarts,
     delayMs: t.crashRestartDelaySec * 1000,
   };
+}
+
+/* TPS 采样间隔。每次是一个完整的 RCON 短连接,不宜跟着 2 秒的指标循环走 */
+const TPS_SAMPLE_MS = 10_000;
+
+/**
+ * 解析 /tps 的输出,返回 { tps, mspt } 或 null。
+ *
+ * 各服务端格式不一样,而且都带颜色码(§a/§c),得先剥掉:
+ *   Paper  : "TPS from last 1m, 5m, 15m: 20.0, 19.98, 19.9"
+ *            "Server tick times (avg/min/max) from last 5s: 3.2/1.1/12.4"
+ *   Purpur : 同 Paper
+ *   Spigot : "TPS from last 1m, 5m, 15m: *20.0, 20.0, 20.0"(卡顿时带星号)
+ * 取 1 分钟那个值:5s 抖动太大,15m 又太钝,看不出刚发生的卡顿。
+ * MSPT 只有 Paper 系有,没有就返回 null —— 不拿 1000/TPS 去倒推,那是假数据。
+ */
+function parseTps(raw) {
+  if (!raw) return null;
+  const text = String(raw).replace(/§./g, '').replace(/\[[\d;]*m/g, '');
+  const m = text.match(/TPS from last 1m[^:]*:\s*\*?([\d.]+)/i);
+  if (!m) return null;
+  const tps = parseFloat(m[1]);
+  if (!Number.isFinite(tps)) return null;
+  let mspt = null;
+  const t = text.match(/tick times[^:]*:\s*([\d.]+)/i);
+  if (t) {
+    const v = parseFloat(t[1]);
+    if (Number.isFinite(v)) mspt = +v.toFixed(1);
+  }
+  // Paper 会报到 20.02 这种略高于 20 的值,截一下免得前端画出超过满格的柱子
+  return { tps: +Math.min(tps, 20).toFixed(2), mspt };
 }
 
 /* 落盘日志单文件上限,超了滚一份 .1(总占用 = 2 倍)。
@@ -156,6 +188,11 @@ class Instance {
     this.tunnelAddr = null;
     this.tunnelError = null;      // last failure reason, for the tunnel view
     this.tunnelClaim = null;      // playit 首次绑定链接
+
+    this.tps = null;              // 最近一次 RCON 采到的 TPS;没开 RCON 就一直是 null
+    this.mspt = null;             // 平均 tick 耗时(仅 Paper 系提供)
+    this._tpsAt = 0;
+    this._tpsBusy = false;
   }
 
   meta() {
@@ -185,6 +222,8 @@ class Instance {
       playersOnline: this.players.size,
       maxPlayers: parseInt(this.getProp('max-players'), 10) || 20,
       metrics: this.metrics,
+      tps: this.tps,          // null = 没开 RCON 或服务端不支持 /tps,前端据此显示"需要 RCON"
+      mspt: this.mspt,
       motd: this.getProp('motd') || '',
       pid: this.proc ? this.proc.pid : null,
       tunnel: { type: this.tunnel.type, state: this.tunnelState, addr: this.tunnelAddr, error: this.tunnelError, claim: this.tunnelClaim },
@@ -414,6 +453,9 @@ class Instance {
       this.metrics.ram = 0;
       this.lastExitCode = code;
       this.lastSignal = signal;
+      // 进程没了,还挂着的在线会话就地结算 —— 否则这些人的 lastJoin 一直开着,
+      // 下次进服会被算成"从上次到现在一直在线",凭空多出几天
+      playtime.closeOpenSessions(this.id);
       this.log(wasStopping || code === 0 ? 'INFO' : 'WARN',
         `[MCSP] 进程退出 (code=${code === null ? 'null' : code}${signal ? `, signal=${signal}` : ''})`);
       this.emitState();
@@ -612,10 +654,12 @@ class Instance {
     let pm;
     if ((pm = message.match(/^(\w{1,16}) joined the game$/))) {
       this.players.add(pm[1]);
+      playtime.onJoin(this.id, pm[1]);
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       this.emitState();
     } else if ((pm = message.match(/^(\w{1,16}) left the game$/))) {
       this.players.delete(pm[1]);
+      playtime.onLeave(this.id, pm[1]);
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       this.emitState();
     }
@@ -1001,13 +1045,53 @@ class Instance {
       this.metrics.ram = 0;
     }
     this.metrics.ramMax = this.xmx;
+    this._tickTps();
     const point = { t: Date.now(), cpu: this.metrics.cpu, ram: this.metrics.ram };
     this.metricsHistory.push(point);
     if (this.metricsHistory.length > METRICS_LIVE_POINTS) this.metricsHistory.shift();
     this._rollMinute(point);
     if (this.proc || this.metricsHistory.length < 3 || this.metricsHistory[this.metricsHistory.length - 2].ram !== 0) {
-      bus.broadcast('metrics', { iid: this.id, ...point });
+      bus.broadcast('metrics', { iid: this.id, ...point, tps: this.tps, mspt: this.mspt });
     }
+  }
+
+  /**
+   * TPS / MSPT 采样(功能 2)。
+   *
+   * CPU% 和 TPS 回答的不是同一个问题:一个吃满核心的服务器可能 20 TPS 跑得
+   * 好好的,而一个 CPU 只用了 30% 的服务器可能因为某个插件卡主线程掉到 5 TPS ——
+   * 玩家感受到的卡是后者,CPU 曲线完全看不出来。
+   *
+   * 只能走 RCON:TPS 是服务端内部状态,/proc 里没有,stdin 又拿不到命令输出。
+   * 所以没开 RCON 就是没有(tps=null),前端如实显示"需要 RCON"而不是编一个数。
+   *
+   * 10 秒一次而不是跟着 2 秒的指标循环:每次都是一个完整的 TCP 连接 +
+   * 认证握手,2 秒一次等于每分钟 30 次握手,对服务端是无谓的负担。
+   */
+  _tickTps() {
+    if (!this.proc || this.state !== 'running') { this.tps = null; this.mspt = null; return; }
+    const now = Date.now();
+    if (this._tpsAt && now - this._tpsAt < TPS_SAMPLE_MS) return;
+    if (this._tpsBusy) return;             // 上一次还没回来,别叠着发
+    this._tpsAt = now;
+    const props = this.readProps();
+    if (String(props['enable-rcon']).toLowerCase() !== 'true' || !props['rcon.password']) {
+      this.tps = null; this.mspt = null;
+      return;
+    }
+    this._tpsBusy = true;
+    require('./rcon').exec({
+      port: parseInt(props['rcon.port'], 10) || 25575,
+      password: props['rcon.password'],
+      command: 'tps',
+    }).then((out) => {
+      const p = parseTps(out);
+      if (p) { this.tps = p.tps; this.mspt = p.mspt; }
+    }).catch(() => {
+      // RCON 不通就当没有这项数据。这里绝不能往控制台打日志:
+      // 10 秒一次的失败会把用户的日志刷满,而 TPS 拿不到并不是故障
+      this.tps = null; this.mspt = null;
+    }).finally(() => { this._tpsBusy = false; });
   }
 }
 

@@ -87,6 +87,10 @@ app.get('/login', (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'login.html'), { headers: { 'Cache-Control': 'no-cache' } });
 });
 /* 旧的 .html 地址 301 到无后缀版本(兼容书签) */
+/* 邀请注册页:免登录,页面自己拿 URL 里的 token 去校验 */
+app.get('/invite/:token', (req, res) => {
+  res.sendFile(path.join(PUBLIC_DIR, 'invite.html'), { headers: { 'Cache-Control': 'no-cache' } });
+});
 app.get('/login.html', (req, res) => res.redirect(301, '/login'));
 app.get('/index.html', (req, res) => res.redirect(301, '/'));
 app.use(express.static(PUBLIC_DIR, {

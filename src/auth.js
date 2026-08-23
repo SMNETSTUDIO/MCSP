@@ -189,6 +189,39 @@ setInterval(() => {
 
 const router = express.Router();
 
+/* ── 邀请注册(功能 10)。这两个端点必须免鉴权:用的人还没有账号 ── */
+
+/** 查邀请是否可用,给注册页决定显示表单还是错误 */
+router.get('/invite/:token', (req, res) => {
+  const r = require('./invites').check(req.params.token);
+  if (r.error) return res.status(400).json({ ok: false, error: r.error });
+  res.json({ ok: true, invitedBy: r.invite.createdBy, note: r.invite.note, expiresAt: r.invite.expiresAt });
+});
+
+router.post('/invite/:token', (req, res) => {
+  const invites = require('./invites');
+  const r = invites.check(req.params.token);
+  if (r.error) return res.status(400).json({ ok: false, error: r.error });
+  const { username, password } = req.body || {};
+  if (!username || !/^[\w.-]{2,24}$/.test(username)) return res.status(400).json({ ok: false, error: '用户名需为 2-24 位字母数字' });
+  if (!password || String(password).length < 6) return res.status(400).json({ ok: false, error: '密码至少 6 位' });
+  if (users.find((u) => u.username === username)) return res.status(409).json({ ok: false, error: '用户名已存在' });
+  users.push({
+    username,
+    password: hashPassword(String(password)),
+    role: 'user',                       // 邀请永远只能建普通用户
+    createdAt: Date.now(),
+    limits: r.invite.limits || undefined,
+    invitedBy: r.invite.createdBy,
+  });
+  saveUsers();
+  // 先建号再核销:反过来的话建号失败会白白烧掉一个邀请
+  invites.consume(req.params.token, username);
+  const token = createSession(username, req);
+  res.setHeader('Set-Cookie', `mcsp_session=${token}; HttpOnly; Path=/; Max-Age=${7 * 86400}; SameSite=Lax`);
+  res.json({ ok: true, user: { username, role: 'user' } });
+});
+
 router.post('/login', (req, res) => {
   const ip = req.ip || 'unknown';
   const attempt = loginAttempts.get(ip);

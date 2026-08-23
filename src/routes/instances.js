@@ -9,6 +9,7 @@ const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB } = require('../con
 const { asyncHandler, dirSize } = require('../utils');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
+const playtime = require('../playtime');
 const modrinth = require('../modrinth');
 const rcon = require('../rcon');
 const { users: authUsers } = require('../auth');
@@ -466,6 +467,8 @@ router.delete('/:iid', asyncHandler(async (req, res) => {
   if (inst.tunnelProc) inst.stopTunnel();
   fs.rmSync(path.join(DATA_DIR, `frpc-${inst.id}.toml`), { force: true });
   fs.rmSync(path.join(DATA_DIR, `playit-${inst.id}.toml`), { force: true });
+  fs.rmSync(path.join(DATA_DIR, 'crashes', `${inst.id}.json`), { force: true });
+  playtime.remove(inst.id);     // 不留孤儿统计文件
   instances.delete(inst.id);
   taskStore.tasks = taskStore.tasks.filter((t) => t.iid !== inst.id);
   saveTasks();
@@ -872,6 +875,17 @@ router.post('/:iid/backups/:id/restore', asyncHandler(async (req, res) => {
   if (req.inst.state !== 'stopped') return res.json({ ok: false, error: '请先停止实例再恢复备份' });
   res.json(await restoreBackup(req.inst, req.params.id));
 }));
+
+/* ── 玩家在线时长(功能 14)── */
+
+router.get('/:iid/playtime', (req, res) => {
+  res.json({ ok: true, players: playtime.list(req.inst.id, req.inst.players) });
+});
+
+router.delete('/:iid/playtime', (req, res) => {
+  playtime.reset(req.inst.id);
+  res.json({ ok: true });
+});
 
 /* ── 崩溃现场(功能 3)── */
 
