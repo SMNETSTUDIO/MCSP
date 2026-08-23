@@ -226,6 +226,9 @@ body {
   display: flex;
   flex-direction: column;
   padding: 22px 14px;
+  /* 侧栏是 100vh 网格里的一格,自身绝不能被内容撑破 —— 撑破的部分不会出现
+     滚动条,而是直接溢出到视口外面,底部的用户信息和版本号就这么没了 */
+  overflow: hidden;
 }
 
 .brand { display: flex; align-items: center; gap: 12px; padding: 4px 10px 22px; }
@@ -249,7 +252,25 @@ body {
 }
 .brand-sub { font-size: 11.5px; color: var(--text-dim); }
 
-.nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+/* flex:1 只让它"能长",不代表它"能缩" —— flex 子项默认 min-height:auto,
+   到了内容高度就顶住不再收缩,于是整个侧栏被撑出 100vh。
+   min-height:0 解开这个下限,导航区在装不下时自己滚,
+   底部的用户卡和版本号则始终留在视口内。
+   矮屏 + 舒适布局 + 管理员(多两个菜单)三者一叠就会触发。 */
+.nav {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 滚动时别让紧贴边缘的条目看着像被切掉 */
+  scrollbar-width: thin;
+}
+.nav::-webkit-scrollbar { width: 6px; }
+.nav::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 3px; }
+.nav::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.26); }
+
+/* 这两块是"锚",任何情况下都不参与压缩 */
+.sidebar-footer, .version-line { flex-shrink: 0; }
 
 .nav-item {
   position: relative;
