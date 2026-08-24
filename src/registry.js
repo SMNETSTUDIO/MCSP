@@ -212,8 +212,11 @@ const CLONE_SKIP = new Set(['logs', 'crash-reports', 'cache']);
 /** 从 from 起找一个没被别的实例占用、也没在 LISTEN 的端口 */
 function findFreePort(from) {
   const taken = new Set([...instances.values()].map((i) => parseInt(i.getProp('server-port'), 10)).filter(Boolean));
+  /* 在循环外取一次:listeningPorts() 每次都要同步读 /proc/net/tcp 和 tcp6,
+     放在循环里最多要读 200 遍,而这几微秒里监听表根本不会变 */
+  const listening = listeningPorts();
   for (let p = from; p < from + 200 && p < 65536; p++) {
-    if (!taken.has(p) && !listeningPorts().has(p)) return p;
+    if (!taken.has(p) && !listening.has(p)) return p;
   }
   return null;
 }

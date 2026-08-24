@@ -9,12 +9,20 @@
  * 审计日志自己把磁盘写满就太讽刺了。
  */
 const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 const { DATA_DIR } = require('./config');
 
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.log');
 const AUDIT_OLD = AUDIT_FILE + '.1';
 const MAX_BYTES = Math.max(1, parseInt(process.env.MCSP_AUDIT_MB, 10) || 16) * 1048576;
+
+/* 查询时最多往回翻多少字节。日志攒到十几 MB 时,"把整个文件读进来再逐行 parse"
+   会同步卡住事件循环几百毫秒 —— 那期间**整个面板**都停着(实测 16 MB 日志下
+   一次查询让 /api/health 从 0.8ms 飙到 282ms)。审计页要的是最近发生了什么,
+   回看这么多已经足够,代价从"随文件线性增长"变成有上界。 */
+const MAX_SCAN_BYTES = 4 * 1048576;
+const SCAN_CHUNK = 256 * 1024;
 
 /* 这些字段一律不入库 —— 审计日志本身不该成为凭据泄露点 */
 const SECRET_KEYS = /pass|token|secret|authtoken|clientsecret|credential/i;
@@ -95,22 +103,66 @@ function redact(value, depth = 0) {
   return value;
 }
 
-function rotateIfNeeded() {
+/* 当前文件大小自己记着,免得每写一条都 statSync 一次。
+   启动时问一次磁盘,之后按写入量累加,轮转后清零 */
+let curBytes = (() => { try { return fs.statSync(AUDIT_FILE).size; } catch { return 0; } })();
+
+function rotate() {
   try {
-    if (fs.statSync(AUDIT_FILE).size < MAX_BYTES) return;
     fs.rmSync(AUDIT_OLD, { force: true });
     fs.renameSync(AUDIT_FILE, AUDIT_OLD);
+    curBytes = 0;
   } catch { /* 文件还不存在 */ }
 }
 
-function write(entry) {
+/* 攒批异步写。
+ *
+ * 原来每条都 appendFileSync + statSync,而审计中间件挂在所有写请求上 ——
+ * 等于每个 POST/PUT/DELETE 都要同步落一次盘。改成攒到下一个事件循环节拍
+ * 一次性 append,窗口只有一个 tick,却把两次同步系统调用从请求路径上摘掉了。
+ *
+ * 代价是进程被 SIGKILL 时可能丢掉最后一个 tick 内的条目;正常退出有下面的
+ * exit 钩子兜底。审计日志不是账本,这个取舍值。
+ */
+let pending = [];
+let flushing = false;
+let scheduled = false;
+
+async function flush() {
+  if (flushing || !pending.length) return;
+  flushing = true;
+  const batch = pending;
+  pending = [];
+  const text = batch.join('');
   try {
-    rotateIfNeeded();
-    fs.appendFileSync(AUDIT_FILE, JSON.stringify(entry) + '\n');
+    if (curBytes >= MAX_BYTES) rotate();
+    await fsp.appendFile(AUDIT_FILE, text);
+    curBytes += Buffer.byteLength(text);
   } catch (err) {
     console.error('[MCSP] 审计日志写入失败:', err.message);
+  } finally {
+    flushing = false;
+    if (pending.length) schedule();
   }
 }
+
+function schedule() {
+  if (scheduled) return;
+  scheduled = true;
+  setImmediate(() => { scheduled = false; flush(); });
+}
+
+function write(entry) {
+  pending.push(JSON.stringify(entry) + '\n');
+  schedule();
+}
+
+/* 正常退出时把没落盘的补上 —— 这里只能同步写 */
+process.on('exit', () => {
+  if (!pending.length) return;
+  try { fs.appendFileSync(AUDIT_FILE, pending.join('')); } catch {}
+  pending = [];
+});
 
 /**
  * Express 中间件:记录所有会改变状态的 /api 请求。
@@ -142,24 +194,62 @@ function middleware(req, res, next) {
   next();
 }
 
-/** 倒序读取最近的审计条目,支持按用户/关键词过滤 */
-function read({ limit = 200, q = '', user = '' } = {}) {
-  let text = '';
-  for (const f of [AUDIT_OLD, AUDIT_FILE]) {
-    try { text += fs.readFileSync(f, 'utf8'); } catch {}
-  }
+/**
+ * 倒序读取最近的审计条目,支持按用户/关键词过滤。
+ *
+ * 从文件**末尾往前**分块读,边读边筛,最多回看 MAX_SCAN_BYTES。三个要点:
+ *   · 异步 I/O —— 不再拿同步读堵住整个面板;
+ *   · 过滤在**原始行文本**上做,只有要返回的那几条才 JSON.parse。
+ *     原来是每条都 parse 一遍、搜索时再 stringify 回去,纯属白烧 CPU;
+ *   · 扫描量有上界,不再随日志文件一起长。
+ *
+ * 返回的 total 是**扫描窗口内**的命中数;窗口没覆盖到文件开头时 truncated 为 true,
+ * 前端据此把话说清楚,不会把"最近 4MB 里有 300 条"说成"总共就 300 条"。
+ */
+async function read({ limit = 200, q = '', user = '' } = {}) {
+  const cap = Math.max(1, Math.min(2000, parseInt(limit, 10) || 200));
+  const needle = q ? String(q).toLowerCase() : '';
+  // 用户名也在原始文本上筛:JSON 里就是 "user":"xxx" 这一段,省掉一次 parse
+  const userNeedle = user ? `"user":${JSON.stringify(String(user))}` : '';
+
   const rows = [];
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    try { rows.push(JSON.parse(line)); } catch {}
+  let total = 0;
+  let budget = MAX_SCAN_BYTES;
+  let truncated = false;
+
+  // 先新后旧:当前文件读完了还有预算,再往轮转出去的那份里翻
+  for (const file of [AUDIT_FILE, AUDIT_OLD]) {
+    if (budget <= 0) { truncated = true; break; }
+    let fh;
+    try { fh = await fsp.open(file, 'r'); } catch { continue; }
+    try {
+      let pos = (await fh.stat()).size;
+      let carry = '';                     // 块首那半行,留给下一块拼
+      while (pos > 0 && budget > 0) {
+        const len = Math.min(SCAN_CHUNK, pos, budget);
+        pos -= len;
+        budget -= len;
+        const buf = Buffer.allocUnsafe(len);
+        await fh.read(buf, 0, len, pos);
+        const lines = (buf.toString('utf8') + carry).split('\n');
+        carry = pos > 0 ? lines.shift() : '';   // 还没读到文件头,首段可能被截断
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const line = lines[i];
+          if (!line || !line.trim()) continue;
+          if (userNeedle && !line.includes(userNeedle)) continue;
+          if (needle && !line.toLowerCase().includes(needle)) continue;
+          total++;
+          if (rows.length < cap) {
+            try { rows.push(JSON.parse(line)); } catch { total--; }
+          }
+        }
+      }
+      if (pos > 0) truncated = true;      // 预算用完了,前面还有没看的
+    } finally {
+      await fh.close();
+    }
   }
-  let out = rows;
-  if (user) out = out.filter((r) => r.user === user);
-  if (q) {
-    const needle = q.toLowerCase();
-    out = out.filter((r) => JSON.stringify(r).toLowerCase().includes(needle));
-  }
-  return { total: out.length, rows: out.slice(-Math.max(1, Math.min(2000, limit))).reverse() };
+  return { total, rows, truncated };
 }
 
 module.exports = { middleware, read, actionOf, redact };

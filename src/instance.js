@@ -1331,8 +1331,9 @@ class Instance {
     if (this._tpsAt && now - this._tpsAt < TPS_SAMPLE_MS) return;
     if (this._tpsBusy) return;             // 上一次还没回来,别叠着发
     this._tpsAt = now;
-    const props = this.readProps();
-    if (String(props['enable-rcon']).toLowerCase() !== 'true' || !props['rcon.password']) {
+    /* 走 getProp 的缓存,别直接 readProps():这里每 10 秒、每个运行中的实例都会到,
+       直接读盘等于把一次同步 I/O 钉死在采样循环上,实例一多就是可观的抖动 */
+    if (String(this.getProp('enable-rcon')).toLowerCase() !== 'true' || !this.getProp('rcon.password')) {
       this.tps = null; this.mspt = null;
       return;
     }

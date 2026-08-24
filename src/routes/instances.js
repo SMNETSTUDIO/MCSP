@@ -1115,19 +1115,28 @@ router.get('/:iid/files', asyncHandler(async (req, res) => {
   let entries;
   try { entries = await fsp.readdir(p, { withFileTypes: true }); }
   catch { return res.status(404).json({ ok: false, error: '目录不存在' }); }
+  /* stat 并发发出去,别一个个 await:5000 个文件的目录串行要 250ms,
+     而这些 stat 之间毫无依赖。分批是为了不把 libuv 线程池一次灌爆,
+     那样反而会拖慢同时在跑的上传和备份 */
+  const STAT_BATCH = 64;
   const out = [];
-  for (const e of entries) {
-    let st;
-    try { st = await fsp.stat(path.join(p, e.name)); } catch { continue; }
-    const isText = TEXT_EXT.has(path.extname(e.name).toLowerCase());
-    out.push({
-      name: e.name,
-      type: e.isDirectory() ? 'dir' : 'file',
-      size: st.size,
-      binary: !e.isDirectory() && (!isText || st.size > 2 * 1048576),
-      archive: !e.isDirectory() && !!archiveKind(e.name),
-      mtime: st.mtimeMs,
-    });
+  for (let i = 0; i < entries.length; i += STAT_BATCH) {
+    const slice = entries.slice(i, i + STAT_BATCH);
+    const stats = await Promise.all(slice.map((e) => fsp.stat(path.join(p, e.name)).catch(() => null)));
+    for (let k = 0; k < slice.length; k++) {
+      const e = slice[k];
+      const st = stats[k];
+      if (!st) continue;                       // 列目录到 stat 之间被删掉了,跳过
+      const isText = TEXT_EXT.has(path.extname(e.name).toLowerCase());
+      out.push({
+        name: e.name,
+        type: e.isDirectory() ? 'dir' : 'file',
+        size: st.size,
+        binary: !e.isDirectory() && (!isText || st.size > 2 * 1048576),
+        archive: !e.isDirectory() && !!archiveKind(e.name),
+        mtime: st.mtimeMs,
+      });
+    }
   }
   out.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
   res.json({ ok: true, path: req.query.path || '/', entries: out });

@@ -246,11 +246,13 @@ async function refreshInstanceContext() {
   metricsDay = [];
   chartRange = 'live';
   $$('#chart-range button').forEach((b) => b.classList.toggle('active', b.dataset.range === 'live'));
+  /* 回放整段历史日志时**不要**走 appendLog:那是给"一次一行"的实时流用的,
+     每行都会写一次 scrollTop,于是每行强制一次同步布局 —— 300 行实测要 1.1 秒,
+     整个界面在这期间是冻住的。拼好一次性塞进去只要 68ms。 */
   const logs = await iapi('/logs');
-  $('#console').innerHTML = '';
-  $('#dash-log').innerHTML = '';
   logStick.clear();                    // 换了实例就是一份新日志,回到默认的贴底
-  for (const entry of logs) appendLog(entry);
+  $('#console').innerHTML = logs.map(logLineHtml).join('');
+  $('#dash-log').innerHTML = logs.slice(-80).map(logLineHtml).join('');   // 迷你日志只留 80 行
   syncLogScroll();
   fmPath = '/'; fmOpenFile = null; $('#fm-editor').hidden = true;
   fmClip = null; fmLastIndex = null; fmSyncClip();   // 剪贴板里的路径属于上一个实例,作废
@@ -2875,9 +2877,11 @@ async function loadAudit() {
       <div class="au-detail dim small" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}${params ? ' · ' + params : ''}</div>
     </div>`;
   }).join('') : '<div class="empty">暂无审计记录</div>';
+  // total 是"最近这段扫描窗口内"的命中数;truncated 说明更早的还没翻,别说成总数
   if (d && d.total > rows.length) {
+    const scope = d.truncated ? '较近的记录中至少有' : '共';
     $('#audit-list').insertAdjacentHTML('beforeend',
-      `<div class="dim small" style="padding:8px 4px">共 ${d.total} 条,只显示最近 ${rows.length} 条</div>`);
+      `<div class="dim small" style="padding:8px 4px">${scope} ${d.total} 条,只显示最近 ${rows.length} 条</div>`);
   }
 }
 $('#au-refresh').addEventListener('click', loadAudit);

@@ -6,6 +6,7 @@ const auth = require('./auth');
 const bus = require('./bus');
 const registry = require('./registry');
 const tasks = require('./tasks');
+const { asyncHandler } = require('./utils');
 
 const app = express();
 // 反代友好:信任第一跳代理(CF/nginx 的 X-Forwarded-*),
@@ -47,9 +48,9 @@ app.use('/api/panel', require('./panelbackup').router);   // 面板配置导出/
 app.use('/api/users', require('./routes/users').router);
 
 /* 审计日志查询(仅管理员) */
-app.get('/api/audit', auth.requireAdmin, (req, res) => {
-  res.json({ ok: true, ...require('./audit').read(req.query) });
-});
+app.get('/api/audit', auth.requireAdmin, asyncHandler(async (req, res) => {
+  res.json({ ok: true, ...await require('./audit').read(req.query) });
+}));
 
 app.use('/api', require('./routes/host'));           // /api/host, /api/paper/versions
 app.use('/api/tunnel', require('./routes/tunnel'));  // 组件安装
