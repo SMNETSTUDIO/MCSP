@@ -108,6 +108,42 @@ function receiveUpload(req, dest, max) {
   });
 }
 
+/* 半路拒绝上传时,剩下的请求体还在路上。
+ *
+ * 直接 req.destroy() 给对端的是一个 RST,而此刻反代正往这条连接里写 body ——
+ * 它自己的转发请求当场失败,浏览器看到的就成了 502,我们精心写的那句
+ * "超过上限 / 配额不足" 反而丢了。Cloudflare Worker 尤其如此:它转发时用的是
+ * chunked(没有 Content-Length),走不到上面按 Content-Length 提前拒绝那条路,
+ * 只会落到这里 —— 于是"传个十几 MB 的包就 502"。
+ *
+ * 所以先把余量吞掉,让 413 能顺着连接正常走完。吞的量有上限:真是几个 GB 的
+ * 包就不陪它收完了,那时才断连(此时 413 已发出,反代多半也已转发出去)。
+ */
+const DRAIN_MAX_BYTES = 64 * 1048576;
+const DRAIN_MAX_MS = 10_000;
+
+function drainRequest(req, maxBytes = DRAIN_MAX_BYTES, maxMs = DRAIN_MAX_MS) {
+  if (req.readableEnded || req.destroyed) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let dropped = 0;
+    const done = (ok) => {
+      clearTimeout(timer);
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+      resolve(ok);
+    };
+    const onData = (chunk) => { dropped += chunk.length; if (dropped > maxBytes) done(false); };
+    const onEnd = () => done(true);
+    const onError = () => done(false);
+    const timer = setTimeout(() => done(false), maxMs);
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+    req.resume();
+  });
+}
+
 /* :iid 统一解析;非管理员只能访问自己的实例(404 不泄露存在性) */
 router.param('iid', (req, res, next, iid) => {
   const inst = instances.get(iid);
@@ -1198,6 +1234,9 @@ router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
   const declared = parseInt(req.headers['content-length'], 10);
   if (Number.isFinite(declared) && declared > max) {
     const qerr = diskQuotaError(req, declared / 1048576);
+    // 同样先收余量:这条路上一个字节都还没读,连接里全是没人管的 body
+    if (!(await drainRequest(req))) res.on('finish', () => req.destroy());
+    res.set('Connection', 'close');
     return res.status(413).json({ ok: false, error: qerr || `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
   }
 
@@ -1209,9 +1248,10 @@ router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
   } catch (err) {
     await fsp.rm(tmp, { force: true });
     if (err.tooLarge) {
-      // 响应发出后直接断连:剩下的字节可能还有好几 GB,没必要收完再丢
-      res.on('finish', () => req.destroy());
       const qerr = diskQuotaError(req, max / 1048576 + 1);
+      // 先收完余量再回话,别让反代把 RST 翻译成 502(见 drainRequest)
+      if (!(await drainRequest(req))) res.on('finish', () => req.destroy());
+      res.set('Connection', 'close');
       return res.status(413).json({ ok: false, error: qerr || `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
     }
     if (res.headersSent || req.destroyed) return;   // 客户端自己断的,没人在等这个响应
