@@ -193,6 +193,8 @@ function switchView(view) {
     account: loadAccount,
   };
   (loaders[view] || (() => {}))();
+  // 容器这会儿才从 display:none 里出来、有了真实高度,贴底的滚动到这里才生效
+  syncLogScroll();
 }
 
 $$('.nav-item').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
@@ -247,7 +249,9 @@ async function refreshInstanceContext() {
   const logs = await iapi('/logs');
   $('#console').innerHTML = '';
   $('#dash-log').innerHTML = '';
+  logStick.clear();                    // 换了实例就是一份新日志,回到默认的贴底
   for (const entry of logs) appendLog(entry);
+  syncLogScroll();
   fmPath = '/'; fmOpenFile = null; $('#fm-editor').hidden = true;
   fmClip = null; fmLastIndex = null; fmSyncClip();   // 剪贴板里的路径属于上一个实例,作废
   $('#log-q').value = ''; $('#log-level').value = '';
@@ -770,7 +774,8 @@ async function applyLogFilter() {
     $('#log-count').textContent = '';
     const logs = await iapi('/logs');
     $('#console').innerHTML = logs.map(logLineHtml).join('');
-    $('#console').scrollTop = $('#console').scrollHeight;
+    logStick.set('#console', true);        // 重绘完回到最新那几行
+    syncLogScroll();
     return;
   }
   const qs = new URLSearchParams({ limit: '1000' });
@@ -781,7 +786,8 @@ async function applyLogFilter() {
   $('#log-count').textContent = `命中 ${d.total} 行 / 缓冲 ${d.buffered} 行`
     + (d.total > d.lines.length ? `(只显示最近 ${d.lines.length} 行)` : '');
   $('#console').innerHTML = d.lines.map(logLineHtml).join('') || '<div class="dim">没有匹配的日志</div>';
-  $('#console').scrollTop = $('#console').scrollHeight;
+  logStick.set('#console', true);          // 搜索结果同理:先看见最近命中的
+  syncLogScroll();
 }
 
 const debouncedLogFilter = (() => {
@@ -806,15 +812,46 @@ $('#log-download').addEventListener('click', () => {
   toast(logFilterOn ? '正在下载(仅当前筛选结果)' : '正在下载完整控制台日志');
 });
 
+/* ── 日志容器的"贴底"状态 ──
+ *
+ * 默认贴底:日志这东西最有用的永远是最新几行,进来就该看见它们。
+ *
+ * 状态记在这里而不是每次去量 scrollHeight —— 因为 .view 没激活时是
+ * display:none,容器量出来 scrollHeight/clientHeight 全是 0,"在底部"恒为真、
+ * 可 scrollTop 又写不进去(元素没有可滚动区域)。等切回该视图,它就停在最顶上,
+ * 也就是最没用的位置。这正是之前控制台和实时动态进去都得手动往下拖的原因。
+ *
+ * 用户自己往上翻(看历史)时置为 false,翻回底部再置回 true —— 实时日志刷屏
+ * 时不会把人正在读的位置拽走。
+ */
+const LOG_PANES = ['#console', '#dash-log'];
+const logStick = new Map();
+const stickyBottom = (sel) => logStick.get(sel) !== false;      // 没记录过 = 默认贴底
+
+/** 视图刚显示出来时调用:这时候容器才拿到真实高度,该贴底的现在才滚得动 */
+function syncLogScroll() {
+  for (const sel of LOG_PANES) {
+    const el = $(sel);
+    if (el && el.clientHeight && stickyBottom(sel)) el.scrollTop = el.scrollHeight;
+  }
+}
+
+for (const sel of LOG_PANES) {
+  $(sel).addEventListener('scroll', () => {
+    const el = $(sel);
+    if (!el.clientHeight) return;      // 隐藏状态下的 scroll 事件量不准,不作数
+    logStick.set(sel, el.scrollHeight - el.scrollTop - el.clientHeight < 60);
+  });
+}
+
 function appendLog(entry) {
   // 筛选生效时别把实时日志混进结果里 —— 但仪表盘的迷你日志不受筛选影响,照常追加
   const targets = logFilterOn ? [['#dash-log', 80]] : [['#console', 400], ['#dash-log', 80]];
   for (const [sel, cap] of targets) {
     const el = $(sel);
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     el.insertAdjacentHTML('beforeend', logLineHtml(entry));
     while (el.children.length > cap) el.firstChild.remove();
-    if (atBottom) el.scrollTop = el.scrollHeight;
+    if (stickyBottom(sel)) el.scrollTop = el.scrollHeight;
   }
 }
 
