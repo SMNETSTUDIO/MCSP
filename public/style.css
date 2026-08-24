@@ -1247,6 +1247,43 @@ body {
 }
 [data-theme="dark"] .seg.active, :root:not([data-theme="light"]) .seg.active { color: #fff; }
 
+/* ── 分段控件(卡片标题里那种紧凑的二选一)──
+ *
+ * 和上面的 .seg 不是一回事:.seg 是外观设置里那种独立按钮,一个个分开摆;
+ * 这里是连成一条轨道的分段控件,给卡片标题栏用 —— 标题栏塞两个整尺寸按钮太重。
+ *
+ * 结构是 <span class="segbar"><button>…</button><button>…</button></span>,
+ * 样式落在**按钮**上。之前 #chart-range 把 .seg 写在外层 span 上,里面的按钮
+ * 一个类都没有 —— 于是渲染成系统原生按钮(2px outset 的立体边框、灰底),
+ * 而且 .active 也不生效(选择器是 .seg.active,要求两个类在同一个元素上),
+ * 根本看不出当前选中的是哪个。 */
+.segbar {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px; border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+[data-theme="light"] .segbar { background: rgba(0, 0, 0, 0.04); border-color: rgba(0, 0, 0, 0.08); }
+.segbar button {
+  padding: 5px 12px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4;
+  white-space: nowrap; cursor: pointer; transition: background 0.18s, color 0.18s;
+}
+.segbar button:hover:not(.active) { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+[data-theme="light"] .segbar button:hover:not(.active) { background: rgba(0, 0, 0, 0.05); }
+.segbar button.active {
+  background: rgba(var(--acc-rgb), 0.22);
+  color: rgb(var(--acc-rgb));
+  box-shadow: inset 0 0 0 1px rgba(var(--acc-rgb), 0.4);
+}
+[data-theme="dark"] .segbar button.active,
+:root:not([data-theme="light"]) .segbar button.active { color: #fff; }
+.segbar button:focus-visible { outline: 2px solid rgb(var(--acc-rgb)); outline-offset: 1px; }
+/* 像素风:圆角一律收掉,边框加粗到 2px,和同页的 .pill/.icon-btn 保持一路 */
+[data-style="pixel"] .segbar { border-width: 2px; border-radius: 0; }
+[data-style="pixel"] .segbar button { border-radius: 0; }
+
 .swatches { display: flex; gap: 12px; flex-wrap: wrap; }
 .swatch {
   width: 34px; height: 34px; border-radius: 50%;

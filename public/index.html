@@ -221,9 +221,9 @@
           <div class="card glass chart-card">
             <div class="card-title row-between">
               <span>性能监控 <span class="dim small">CPU % · 内存 MB</span></span>
-              <span class="seg" id="chart-range">
-                <button class="active" data-range="live">实时 5 分钟</button>
-                <button data-range="day">近 24 小时</button>
+              <span class="segbar" id="chart-range" role="group" aria-label="图表时间范围">
+                <button type="button" class="active" data-range="live">实时 5 分钟</button>
+                <button type="button" data-range="day">近 24 小时</button>
               </span>
             </div>
             <canvas id="chart" height="190"></canvas>
