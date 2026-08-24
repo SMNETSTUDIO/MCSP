@@ -30,6 +30,17 @@ async function req(method, path, body) {
   return { status: res.status, json };
 }
 
+/** 等实例离开 installing 状态(装服务端是异步的),最多等 15 秒 */
+async function waitSettled(iid, timeoutMs = 15000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const r = await req('GET', `/api/instances/${iid}/status`);
+    if (!r.json || r.json.state !== 'installing') return r.json && r.json.state;
+    await new Promise((x) => setTimeout(x, 200));
+  }
+  return 'installing';   // 超时就照原样跑,让用例自己报出真实问题
+}
+
 /** 分片上传要发裸字节,借不到上面那个只会 JSON 的 req() */
 async function reqRaw(method, path, buf) {
   const res = await fetch(BASE + path, {
@@ -503,6 +514,59 @@ async function multiTenantSuite() {
  * 压缩模块的本地往返:不碰面板数据,在临时目录里打包再解回来比对。
  * zip 是我们自己按格式写的,不跑一遍很难发现头字段错位。
  */
+/**
+ * 导入已有服务器的完整三步:建空壳 → 传包 → finalize 解压识别。
+ *
+ * 加这条是因为它整个坏过而没人发现:POST /import 注册在 router.use('/:iid')
+ * 之后,被当成一个叫 "import" 的实例 ID 查,恒返回 404。功能全废,却只是个
+ * 404、不报错,而冒烟里当时**一条都没覆盖导入流程**。
+ */
+async function importFlowRoundtrip() {
+  const fsp = require('fs/promises');
+  const path = require('path');
+  const os = require('os');
+  const { createArchive } = require('../src/archive');
+
+  // 第一步就是当初挂掉的地方:先确认它不再 404
+  let r = await req('POST', '/api/instances/import', { name: 'smoke-导入', xmx: 1024 });
+  check('import: 建空壳实例(不再被 /:iid 吞掉)',
+    r.status === 200 && r.json && r.json.ok && r.json.instance && r.json.instance.id,
+    `${r.status} ${JSON.stringify(r.json)}`);
+  const iid = r.json && r.json.instance && r.json.instance.id;
+  if (!iid) return;
+
+  check('import: 空壳状态是 importing', r.json.instance.state === 'importing', r.json.instance.state);
+
+  // 造一个像模像样的服务端包:server.properties + 一个 jar
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcsp-import-'));
+  try {
+    const src = path.join(root, 'srv');
+    await fsp.mkdir(src, { recursive: true });
+    await fsp.writeFile(path.join(src, 'server.properties'), 'server-port=25599\nlevel-name=world\n');
+    await fsp.writeFile(path.join(src, 'server.jar'), Buffer.alloc(2048, 7));
+    const zip = path.join(root, 'srv.zip');
+    await createArchive(zip, src, await fsp.readdir(src), 'zip');
+
+    const buf = await fsp.readFile(zip);
+    r = await reqRaw('POST', `/api/instances/${iid}/files/upload?path=%2F&name=srv.zip&overwrite=1`, buf);
+    check('import: 压缩包上传成功', r.status === 200 && r.json && r.json.ok, JSON.stringify(r.json));
+
+    r = await req('POST', `/api/instances/${iid}/import/finalize`, { archive: '/srv.zip', eula: true });
+    check('import: finalize 解压并识别', r.status === 200 && r.json && r.json.ok, JSON.stringify(r.json));
+
+    r = await req('GET', `/api/instances/${iid}/files?path=/`);
+    const names = ((r.json && r.json.entries) || []).map((e) => e.name);
+    check('import: 包内容已就位', names.includes('server.properties') && names.includes('server.jar'), names.join(','));
+    check('import: 压缩包本身已清掉', !names.includes('srv.zip'), names.join(','));
+
+    r = await req('GET', `/api/instances/${iid}/status`);
+    check('import: 导完不再是 importing', r.json && r.json.state !== 'importing', r.json && r.json.state);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+    await req('DELETE', `/api/instances/${iid}`);
+  }
+}
+
 async function archiveRoundtrip() {
   const fsp = require('fs/promises');
   const path = require('path');
@@ -612,6 +676,12 @@ async function uniqueNameRoundtrip() {
   r = await req('GET', '/api/instances');
   check('instances list', r.status === 200 && Array.isArray(r.json));
   const inst = r.json && r.json[0];
+
+  /* 刚建出来的实例会经历 stopped → installing → stopped(装服务端是异步的,
+     约几百毫秒)。撞在 installing 这一小段里跑用例,恢复备份那条会被
+     "请先停止实例再恢复备份" 挡下,报成一个跟它本意无关的假失败 ——
+     这就是偶发的 "133 passed, 1 failed"。先等它落定再往下走。 */
+  if (inst) await waitSettled(inst.id);
 
   if (inst) {
     const iid = inst.id;
@@ -729,6 +799,7 @@ async function uniqueNameRoundtrip() {
   r = await req('GET', '/api/instances/not-exist/status');
   check('404 instance', r.status === 404);
 
+  await importFlowRoundtrip();          // 自己建实例,不依赖 inst;但要登录后才能跑
   if (inst) await incrementalBackupSuite(inst.id);
   if (inst) await chunkedUploadSuite(inst.id);
   if (inst) await rconTunnelSuite(inst.id);

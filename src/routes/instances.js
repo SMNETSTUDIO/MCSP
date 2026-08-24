@@ -191,6 +191,50 @@ function requiredLevel(req) {
   return OPERATOR_WRITES.some((re) => re.test(sub)) ? LEVEL.operator : LEVEL.manager;
 }
 
+/* ── 导入已有服务器 ──
+ *
+ * 分三步,因为要复用现成的上传接口(带进度条,大存档能传几个 G):
+ *   1) POST /import                建一个空壳实例,拿到 iid
+ *   2) 前端把压缩包传到 /:iid/files/upload(大文件自动走分片)
+ *   3) POST /:iid/import/finalize  解压 → 认出类型和版本 → 落元数据
+ *
+ * 空壳实例的 state 是 importing,前端据此不显示启动按钮 —— 半个服务器被拉起来
+ * 只会写坏存档。
+ *
+ * ⚠ 这条**必须**注册在下面那个 router.use('/:iid') 之前。Express 对 use() 层
+ * 同样会跑 router.param('iid'),所以 /import 会被当成一个叫 "import" 的实例 ID
+ * 去查,查不到就 404 —— 这个功能因此整整坏了一段时间,而且不报错、只是 404。
+ * 以后再加**不带 :iid 的顶层子路由**,一律加在这里,别加到下面去。 */
+router.post('/import', (req, res) => {
+  const { name, icon, xmx } = req.body || {};
+  if (!name || !String(name).trim()) return res.status(400).json({ ok: false, error: '实例名称不能为空' });
+
+  const xmxVal = Math.min(65536, Math.max(512, parseInt(xmx, 10) || 2048));
+  const qerr = quotaError(req, xmxVal, true);
+  if (qerr) return res.status(403).json({ ok: false, error: qerr });
+
+  const id = crypto.randomUUID().slice(0, 8);
+  const inst = new Instance({
+    id,
+    name: String(name).trim().slice(0, 40),
+    owner: req.user.username,
+    type: 'vanilla',                 // 占位,finalize 时按探测结果改写
+    version: '',
+    jar: 'server.jar',
+    xmx: xmxVal,
+    icon: icon || '🧭',
+    createdAt: Date.now(),
+  });
+  fs.mkdirSync(inst.dir, { recursive: true });
+  inst.state = 'importing';
+  instances.set(id, inst);
+  disk.refresh(id);
+  saveRegistry();
+  bus.broadcast('instances', {});
+  inst.log('INFO', '[MCSP] 已建立空实例,等待上传服务器压缩包…');
+  res.json({ ok: true, instance: inst.snapshot() });
+});
+
 router.use('/:iid', (req, res, next) => {
   const have = LEVEL[req.perm] || 0;
   const need = requiredLevel(req);
@@ -285,44 +329,6 @@ router.post('/', (req, res) => {
     port: parseInt(port, 10) || 25565 + instances.size - 1,
     gamemode: ['survival', 'creative', 'adventure', 'spectator'].includes(gamemode) ? gamemode : 'survival',
   });
-});
-
-/* ── 导入已有服务器 ──
-   分两步,因为要复用现成的上传接口(带进度条,大存档能传几个 G):
-   1) POST /import        建一个空壳实例,拿到 iid
-   2) 前端把压缩包传到 /:iid/files/upload
-   3) POST /:iid/import/finalize  解压 → 认出类型和版本 → 落元数据
-
-   空壳实例的 state 是 importing,前端据此不显示启动按钮 —— 半个服务器
-   被拉起来只会写坏存档。 */
-router.post('/import', (req, res) => {
-  const { name, icon, xmx } = req.body || {};
-  if (!name || !String(name).trim()) return res.status(400).json({ ok: false, error: '实例名称不能为空' });
-
-  const xmxVal = Math.min(65536, Math.max(512, parseInt(xmx, 10) || 2048));
-  const qerr = quotaError(req, xmxVal, true);
-  if (qerr) return res.status(403).json({ ok: false, error: qerr });
-
-  const id = crypto.randomUUID().slice(0, 8);
-  const inst = new Instance({
-    id,
-    name: String(name).trim().slice(0, 40),
-    owner: req.user.username,
-    type: 'vanilla',                 // 占位,finalize 时按探测结果改写
-    version: '',
-    jar: 'server.jar',
-    xmx: xmxVal,
-    icon: icon || '🧭',
-    createdAt: Date.now(),
-  });
-  fs.mkdirSync(inst.dir, { recursive: true });
-  inst.state = 'importing';
-  instances.set(id, inst);
-  disk.refresh(id);
-  saveRegistry();
-  bus.broadcast('instances', {});
-  inst.log('INFO', '[MCSP] 已建立空实例,等待上传服务器压缩包…');
-  res.json({ ok: true, instance: inst.snapshot() });
 });
 
 /** 解压上传上来的包并认出这是个什么服务端 { archive: '/xxx.zip' } */
@@ -953,8 +959,19 @@ router.post('/:iid/backups', asyncHandler(async (req, res) => {
   // 备份是实例目录的 tar.gz,压完只会更小,拿目录体积做保守预检
   const dqerr = diskQuotaError(req, disk.instanceUsage(req.inst.id).instMB);
   if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
-  const r = await createBackup(req.inst, req.body && req.body.name,
-    { mode: req.body && req.body.mode });
+  /* 和解压/打包共用一把锁。增量备份靠一个 .snar 快照文件记"上次备份到哪",
+     tar --listed-incremental 会就地改写它 —— 两个增量备份并发跑,就是两个
+     进程同时读写同一份快照,整条增量链会被写坏,而且要等到恢复时才发现 */
+  if (archiveBusy.has(req.inst.id)) {
+    return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
+  }
+  archiveBusy.add(req.inst.id);
+  let r;
+  try {
+    r = await createBackup(req.inst, req.body && req.body.name, { mode: req.body && req.body.mode });
+  } finally {
+    archiveBusy.delete(req.inst.id);
+  }
   disk.refresh(req.inst.id);      // 保留策略可能顺手删了旧包,增量算不准,直接重算
   res.json(r.ok ? { ...r, backups: listBackups(req.inst) } : r);
 }));
@@ -968,7 +985,16 @@ router.get('/:iid/backups/:id/inspect', asyncHandler(async (req, res) => {
 router.post('/:iid/backups/:id/restore', asyncHandler(async (req, res) => {
   if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
   if (req.inst.state !== 'stopped') return res.json({ ok: false, error: '请先停止实例再恢复备份' });
-  res.json(await restoreBackup(req.inst, req.params.id));
+  // 恢复要往实例目录里解包,和备份/解压/打包必须互斥,否则解一半被另一个覆盖
+  if (archiveBusy.has(req.inst.id)) {
+    return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });
+  }
+  archiveBusy.add(req.inst.id);
+  try {
+    res.json(await restoreBackup(req.inst, req.params.id));
+  } finally {
+    archiveBusy.delete(req.inst.id);
+  }
 }));
 
 /* ── 玩家在线时长(功能 14)── */
@@ -1792,9 +1818,14 @@ router.post('/:iid/tasks', (req, res) => {
   if (!name || !String(name).trim()) return res.status(400).json({ ok: false, error: '任务名称不能为空' });
   if (!['restart', 'backup', 'command', 'start', 'stop'].includes(action)) return res.status(400).json({ ok: false, error: '未知任务类型' });
   let sched;
-  if (schedule && schedule.type === 'interval' && +schedule.minutes >= 1) {
-    sched = { type: 'interval', minutes: Math.floor(+schedule.minutes) };
-  } else if (schedule && schedule.type === 'daily' && /^\d{2}:\d{2}$/.test(schedule.time || '')) {
+  /* 上界一年:Infinity 能过 ">= 1",但 Infinity * 60000 还是 Infinity,
+     调度器里那句 `Date.now() - base >= minutes * 60000` 永远不成立 ——
+     任务建出来了、列表里也看得见,就是永远不执行。NaN 同理(比较恒为 false),
+     还会以 null 落进 tasks.json。这种"看着建成了其实是死的"最难查 */
+  const mins = Math.floor(Number(schedule && schedule.minutes));
+  if (schedule && schedule.type === 'interval' && Number.isFinite(mins) && mins >= 1 && mins <= 527040) {
+    sched = { type: 'interval', minutes: mins };
+  } else if (schedule && schedule.type === 'daily' && /^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time || '')) {
     sched = { type: 'daily', time: schedule.time };
   } else {
     return res.status(400).json({ ok: false, error: '调度配置无效' });

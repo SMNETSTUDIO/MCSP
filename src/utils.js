@@ -18,9 +18,19 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+/**
+ * 先写临时文件再 rename —— 同一文件系统上 rename 是原子的。
+ *
+ * 直接覆盖写的话,进程在写到一半时被杀(OOM / 断电 / kill -9)会留下一个截断的
+ * JSON。读端虽然有 fallback,但那意味着 **users.json 变成空数组** ——
+ * 所有账号一起没了。这几个文件(账号、会话、实例注册表、计划任务)丢一个都很痛,
+ * 多一次 rename 换一个"要么是旧的完整内容、要么是新的完整内容"值。
+ */
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2));
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2));
+  fs.renameSync(tmp, file);
 }
 
 async function dirSize(dir) {
