@@ -5,7 +5,10 @@
 const crypto = require('crypto');
 const express = require('express');
 const path = require('path');
-const { USERS_FILE, SESSIONS_FILE, SESSION_TTL_MS, DATA_DIR } = require('./config');
+const {
+  USERS_FILE, SESSIONS_FILE, SESSION_TTL_MS, DATA_DIR,
+  UPLOAD_CHUNK_MB, UPLOAD_CONCURRENCY, MAX_UPLOAD_MB,
+} = require('./config');
 const { readJson, writeJson } = require('./utils');
 const totp = require('./totp');
 
@@ -289,6 +292,14 @@ router.get('/me', requireAuth, (req, res) => {
     // 前端据这两项决定要不要弹强制配置引导
     require2FA: !!require('./settings').get().require2FA,
     viaToken: !!req.user.viaToken,
+  },
+  /* 上传参数下发给前端。chunkMB 在这儿只是"要不要走分片"的判断依据;
+     真正切片必须用 init 响应里的 chunkSize —— 配置在页面加载之后被改过的话,
+     照这份旧值切出来的片会每一片都被判长度不符 */
+  upload: {
+    chunkMB: UPLOAD_CHUNK_MB,
+    concurrency: UPLOAD_CONCURRENCY,
+    maxUploadMB: MAX_UPLOAD_MB,
   } });
 });
 

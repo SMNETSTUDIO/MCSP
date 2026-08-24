@@ -42,6 +42,7 @@ const TYPE_LABELS = {
 const typeLabel = (t) => TYPE_LABELS[t] || t || 'Paper';
 
 let me = null;                    // current user
+let uploadCfg = null;             // 服务端下发的分片大小/并发数(见 /auth/me)
 let currentView = 'overview';
 let currentIid = localStorage.getItem('mcsp_iid') || null;
 let instMap = new Map();          // iid -> snapshot
@@ -1792,28 +1793,122 @@ $('#cfg-jvm-clear').addEventListener('click', () => { $('#cfg-jvm').value = ''; 
 $('#fm-zip').addEventListener('click', () => fmArchive('zip'));
 $('#fm-targz').addEventListener('click', () => fmArchive('tar.gz'));
 
-/* ── 上传:XHR(要 upload.progress,fetch 给不了)· body 就是文件本身 ── */
+/* ── 上传:XHR(要 upload.progress,fetch 给不了)· body 就是文件本身 ──
+ *
+ * 大文件走分片。原因是反代:面板常被架在隧道 / Cloudflare Worker 后面,这类链路
+ * 在请求体 10 MB 出头就直接 502(请求压根到不了面板)。小文件仍一次传完 —— 省掉
+ * init/finish 两次往返,一堆配置文件那种场景差别很明显。
+ */
+
+/* 全局在途上传请求数闸门。
+ *
+ * 关键:**只有真正的 HTTP 请求占槽位**,uploadChunked 这层编排不占。否则
+ * 3 个大文件各占一个槽、又都在等自己的分片要槽,就地死锁。 */
+function makeLimiter(n) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= n || !queue.length) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve().then(fn).then(resolve, reject).finally(() => { active--; next(); });
+  };
+  return (fn) => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+let uploadGate = makeLimiter(3);        // init() 拿到服务端配置后会重建
+
+/** 一次 XHR,统一解析 {ok,...} / HTTP 状态。onProgress 收到的是本次请求已发字节数 */
+function uploadXhr({ method = 'POST', url, body, json, onProgress }) {
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader('Content-Type', json ? 'application/json' : 'application/octet-stream');
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => { if (e.lengthComputable) onProgress(e.loaded); });
+    }
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 401) { location.href = '/login'; return resolve({ ok: false, error: '会话已过期', status: 401 }); }
+      let r = null;
+      try { r = JSON.parse(xhr.responseText); } catch {}
+      // 成功时别留下 error 字段 —— 调用方写 if (r.error) 就会被一个"HTTP 200"坑到
+      if (r && r.ok) return resolve({ ...r, status: xhr.status });
+      resolve({ ok: false, error: (r && r.error) || `HTTP ${xhr.status}`, status: xhr.status });
+    });
+    xhr.addEventListener('error', () => resolve({ ok: false, error: '网络错误', status: 0 }));
+    xhr.addEventListener('abort', () => resolve({ ok: false, error: '已取消', status: 0 }));
+    xhr.send(json ? JSON.stringify(body) : body);
+  });
+}
 
 /* iid 可指定 —— 导入流程要传给刚建好的空壳实例,而不是当前选中的那个 */
 function uploadOne(file, dir, overwrite, onProgress, iid = null) {
-  return new Promise((resolve) => {
-    const q = `?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}${overwrite ? '&overwrite=1' : ''}`;
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `/api/instances/${iid || currentIid}/files/upload${q}`);
-    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) onProgress(e.loaded / e.total);
-    });
-    xhr.addEventListener('load', () => {
-      if (xhr.status === 401) { location.href = '/login'; return resolve({ ok: false, error: '会话已过期' }); }
-      let r = null;
-      try { r = JSON.parse(xhr.responseText); } catch {}
-      resolve(r || { ok: false, error: `HTTP ${xhr.status}` });
-    });
-    xhr.addEventListener('error', () => resolve({ ok: false, error: '网络错误' }));
-    xhr.addEventListener('abort', () => resolve({ ok: false, error: '已取消' }));
-    xhr.send(file);
-  });
+  const chunkMB = (uploadCfg && uploadCfg.chunkMB) || 5;
+  if (file.size > chunkMB * 1048576) return uploadChunked(file, dir, overwrite, onProgress, iid);
+  return uploadWhole(file, dir, overwrite, onProgress, iid);
+}
+
+/** 一次传完(小文件 / 老路径) */
+function uploadWhole(file, dir, overwrite, onProgress, iid) {
+  const q = `?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}${overwrite ? '&overwrite=1' : ''}`;
+  return uploadGate(() => uploadXhr({
+    url: `/api/instances/${iid || currentIid}/files/upload${q}`,
+    body: file,
+    onProgress: (loaded) => onProgress(loaded / (file.size || 1)),
+  }));
+}
+
+/** 分片传:init → 并发 chunk → finish */
+async function uploadChunked(file, dir, overwrite, onProgress, iid) {
+  const base = `/api/instances/${iid || currentIid}/files/upload`;
+
+  const init = await uploadGate(() => uploadXhr({
+    url: `${base}/init`, json: true,
+    body: { path: dir, name: file.name, size: file.size, overwrite: !!overwrite },
+  }));
+  if (!init.ok) return init;
+
+  /* 切片一律按 init 返回的 chunkSize —— 不能用本地那份配置。页面加载之后服务端
+     配置被改过的话,照旧值切出来的片会每一片都被判长度不符 */
+  const { uploadId, chunkSize, chunks } = init;
+  const loaded = new Array(chunks).fill(0);
+  let lastPct = -1;
+  const report = () => {
+    const sum = loaded.reduce((a, b) => a + b, 0);
+    const pct = Math.floor((sum / file.size) * 100);
+    // 重传会把某片的 loaded 清零,进度条倒退看着就像出 bug 了 —— 只准往前走
+    if (pct > lastPct) { lastPct = pct; onProgress(sum / file.size); }
+  };
+
+  let failure = null;
+  await Promise.all(Array.from({ length: chunks }, async (_, i) => {
+    const start = i * chunkSize;
+    const blob = file.slice(start, Math.min(start + chunkSize, file.size));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (failure) return;                       // 已经有片彻底失败了,别再白传
+      if (attempt) await new Promise((r) => setTimeout(r, [500, 1500, 4000][attempt - 1]));
+      loaded[i] = 0;
+      const r = await uploadGate(() => uploadXhr({
+        url: `${base}/chunk?uploadId=${uploadId}&index=${i}`,
+        body: blob,
+        onProgress: (n) => { loaded[i] = n; report(); },
+      }));
+      if (r.ok) { loaded[i] = blob.size; report(); return; }
+      /* 会话没了 —— 后面每一片都会同样 404,重试纯属拖延。直接判整个文件失败 */
+      if (r.status === 404) { failure = r.error; return; }
+      // 4xx 是确定性的,重试不会有不同结果;只有网络错误和 5xx 值得再来一次
+      if (r.status >= 400 && r.status < 500) { failure = r.error; return; }
+      if (attempt === 2) failure = r.error;
+    }
+  }));
+
+  if (failure) {
+    uploadGate(() => uploadXhr({ url: `${base}/abort`, json: true, body: { uploadId } })).catch(() => {});
+    return { ok: false, error: failure };
+  }
+
+  const fin = await uploadGate(() => uploadXhr({ url: `${base}/finish`, json: true, body: { uploadId } }));
+  if (fin.ok) onProgress(1);
+  return fin;
 }
 
 async function uploadFiles(fileList) {
@@ -1836,12 +1931,13 @@ async function uploadFiles(fileList) {
       <div class="up-pct">等待…</div>
     </div>`).join('');
 
-  let failed = 0;
-  for (let i = 0; i < files.length; i++) {
+  /* 所有文件一起开跑,真正的并发上限由 uploadGate 统一卡着 —— 这里不能再套一层
+     限流:编排任务占了槽位再去等分片的槽位就会死锁 */
+  const results = await Promise.all(files.map(async (f, i) => {
     const row = box.querySelector(`[data-up="${i}"]`);
     const bar = row.querySelector('.up-bar i');
     const pct = row.querySelector('.up-pct');
-    const r = await uploadOne(files[i], dir, existing.has(files[i].name), (p) => {
+    const r = await uploadOne(f, dir, existing.has(f.name), (p) => {
       bar.style.width = `${Math.round(p * 100)}%`;
       pct.textContent = `${Math.round(p * 100)}%`;
     });
@@ -1849,8 +1945,9 @@ async function uploadFiles(fileList) {
     bar.style.width = '100%';
     pct.textContent = r.ok ? '完成' : r.error;
     pct.title = r.ok ? '' : r.error;      // 错误文案比列宽长,截断后靠 tooltip 看全
-    if (!r.ok) failed++;
-  }
+    return r;
+  }));
+  const failed = results.filter((r) => !r.ok).length;
 
   if (dir === fmPath) loadFiles(fmPath);
   toast(failed ? `${files.length - failed} 个成功,${failed} 个失败` : `${files.length} 个文件已上传`, !!failed);
@@ -3123,6 +3220,9 @@ function connectStream() {
 (async function init() {
   const meRes = await api('/auth/me');
   me = meRes.user;
+  // 老服务端不带这块,兜底到内置默认值,别让上传直接不可用
+  uploadCfg = meRes.upload || null;
+  uploadGate = makeLimiter((uploadCfg && uploadCfg.concurrency) || 3);
   $('#me-name').textContent = me.username;
   $('#me-role').textContent = me.role === 'admin' ? '管理员' : '普通用户';
   $('#me-avatar').textContent = me.username[0].toUpperCase();

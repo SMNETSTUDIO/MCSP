@@ -30,6 +30,117 @@ async function req(method, path, body) {
   return { status: res.status, json };
 }
 
+/** 分片上传要发裸字节,借不到上面那个只会 JSON 的 req() */
+async function reqRaw(method, path, buf) {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { 'Content-Type': 'application/octet-stream', ...(cookie ? { Cookie: cookie } : {}) },
+    body: buf,
+    redirect: 'manual',
+  });
+  let json = null;
+  try { json = await res.json(); } catch {}
+  return { status: res.status, json };
+}
+
+/**
+ * 分片上传(绕开反代 ~10MB 请求体墙的那套 init → chunk ×N → finish)。
+ *
+ * 重点不是"能不能传上去",而是两件容易静默出错的事:
+ *   · 分片乱序并发写偏移 —— 顺序写永远碰不出偏移算错的 bug;
+ *   · 缺片 / 短片 —— 这两种情况会合出一个中间带零洞的文件,大小还是对的,
+ *     只有把内容读回来逐字节比对才发现。
+ */
+async function chunkedUploadSuite(iid) {
+  let r = await req('POST', `/api/instances/${iid}/files/upload/init`, { path: '/', name: '../pwn.txt', size: 10 });
+  check('chunk init: 文件名沙箱', r.status === 400);
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/init`, { path: '/../../', name: 'pwn.txt', size: 10 });
+  check('chunk init: 路径沙箱', r.status === 400);
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/init`, { path: '/', name: 'huge.bin', size: 1024 ** 4 });
+  check('chunk init: 声明体积超上限即拒', r.status === 413, JSON.stringify(r.json));
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/init`, { path: '/', name: 'zero.bin', size: 0 });
+  check('chunk init: 拒绝 0 字节', r.status === 400);
+
+  // uploadId 是能力凭证:格式不对 / 不存在的一律挡掉,且不区分"不存在"和"不是你的"
+  r = await reqRaw('POST', `/api/instances/${iid}/files/upload/chunk?uploadId=../../etc&index=0`, Buffer.alloc(4));
+  check('chunk: uploadId 格式校验', r.status === 400);
+
+  const zeros = '0'.repeat(32);
+  r = await reqRaw('POST', `/api/instances/${iid}/files/upload/chunk?uploadId=${zeros}&index=0`, Buffer.alloc(4));
+  check('chunk: 未知会话 404', r.status === 404);
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/finish`, { uploadId: zeros });
+  check('finish: 未知会话 404', r.status === 404);
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/abort`, { uploadId: zeros });
+  check('abort: 幂等(未知会话也返回 ok)', r.status === 200 && r.json.ok);
+
+  /* 端到端:三片乱序并发发出,合出来的文件必须逐字节正确。
+     末片故意取成余数,顺带验证"最后一片短"这条路 */
+  r = await req('GET', '/api/auth/me');
+  check('me: 下发上传参数', !!(r.json && r.json.upload && r.json.upload.chunkMB > 0), JSON.stringify(r.json && r.json.upload));
+  const CH = ((r.json && r.json.upload && r.json.upload.chunkMB) || 5) * 1048576;
+  const parts = [Buffer.alloc(CH, 0x41), Buffer.alloc(CH, 0x42), Buffer.alloc(7, 0x43)];
+  const total = CH * 2 + 7;
+
+  r = await req('POST', `/api/instances/${iid}/files/upload/init`,
+    { path: '/', name: 'smoke-chunk.bin', size: total, overwrite: true });
+  const uid = r.json && r.json.uploadId;
+  check('chunk init: 拿到 uploadId', r.status === 200 && /^[0-9a-f]{32}$/.test(uid || ''), JSON.stringify(r.json));
+  check('chunk init: chunkSize 由服务端说了算', r.json && r.json.chunkSize === CH && r.json.chunks === 3,
+    JSON.stringify(r.json && { chunkSize: r.json.chunkSize, chunks: r.json.chunks }));
+
+  if (uid) {
+    const rs = await Promise.all([2, 0, 1].map((i) =>
+      reqRaw('POST', `/api/instances/${iid}/files/upload/chunk?uploadId=${uid}&index=${i}`, parts[i])));
+    check('chunk: 三片乱序并发全部收下', rs.every((x) => x.status === 200 && x.json.ok),
+      JSON.stringify(rs.map((x) => x.status)));
+
+    // 越界序号 / 短片都得挡住,不能让零洞混进去
+    r = await reqRaw('POST', `/api/instances/${iid}/files/upload/chunk?uploadId=${uid}&index=99`, Buffer.alloc(4));
+    check('chunk: 序号越界被拒', r.status === 400);
+
+    r = await req('POST', `/api/instances/${iid}/files/upload/finish`, { uploadId: uid });
+    check('finish: 合并成功且体积正确', r.status === 200 && r.json.ok && r.json.size === total, JSON.stringify(r.json));
+
+    const dl = await fetch(`${BASE}/api/instances/${iid}/files/download?path=/smoke-chunk.bin`,
+      { headers: { Cookie: cookie } });
+    const got = Buffer.from(await dl.arrayBuffer());
+    check('finish: 内容逐字节正确(偏移没写错)',
+      got.length === total && got[0] === 0x41 && got[CH - 1] === 0x41
+      && got[CH] === 0x42 && got[CH * 2 - 1] === 0x42
+      && got[CH * 2] === 0x43 && got[total - 1] === 0x43,
+      `len=${got.length} 期望=${total}`);
+
+    r = await req('POST', `/api/instances/${iid}/files/upload/finish`, { uploadId: uid });
+    check('finish: 同一会话不能重复合并', r.status === 404, JSON.stringify(r.json));
+
+    await req('DELETE', `/api/instances/${iid}/files?path=%2Fsmoke-chunk.bin`);
+  }
+
+  /* 缺片就 finish:必须拒。放过去的话 rename 出来的是个中间带零洞的文件,
+     体积、名字都对,用户要到启动服务器时才发现存档是坏的 */
+  r = await req('POST', `/api/instances/${iid}/files/upload/init`,
+    { path: '/', name: 'smoke-partial.bin', size: CH * 2, overwrite: true });
+  const uid2 = r.json && r.json.uploadId;
+  if (uid2) {
+    await reqRaw('POST', `/api/instances/${iid}/files/upload/chunk?uploadId=${uid2}&index=0`, Buffer.alloc(CH, 1));
+    r = await req('POST', `/api/instances/${iid}/files/upload/finish`, { uploadId: uid2 });
+    check('finish: 缺片被拒', r.status === 409, JSON.stringify(r.json));
+
+    r = await req('POST', `/api/instances/${iid}/files/upload/abort`, { uploadId: uid2 });
+    check('abort: 返回 ok', r.status === 200 && r.json.ok);
+
+    r = await req('GET', `/api/instances/${iid}/files?path=/`);
+    const names = (r.json && (r.json.entries || r.json)) || [];
+    check('abort: 目录里不留半截文件',
+      Array.isArray(names) && !names.some((e) => e && e.name === 'smoke-partial.bin'));
+  }
+}
+
 /**
  * 增量备份链(功能 5)。
  *
@@ -619,6 +730,7 @@ async function uniqueNameRoundtrip() {
   check('404 instance', r.status === 404);
 
   if (inst) await incrementalBackupSuite(inst.id);
+  if (inst) await chunkedUploadSuite(inst.id);
   if (inst) await rconTunnelSuite(inst.id);
   if (inst && isAdmin) await collabRoleSuite(inst.id);
 

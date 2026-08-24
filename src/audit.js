@@ -33,7 +33,9 @@ const ACTIONS = [
   [/^POST \/instances\/\*\/backups$/, '创建备份'],
   [/^POST \/instances\/\*\/backups\/\*\/restore$/, '恢复备份'],
   [/^DELETE \/instances\/\*\/backups\/\*$/, '删除备份'],
-  [/^POST \/instances\/\*\/files\/upload$/, '上传文件'],
+  /* 分片上传会命中 /files/upload/init|finish;chunk 在中间件里就被跳过了,
+     不然一个 4 GB 的包能写出 800 条审计,把 16 MB 的轮转冲干净 */
+  [/^POST \/instances\/\*\/files\/upload(\/(init|finish|abort))?$/, '上传文件'],
   [/^PUT \/instances\/\*\/files\/content$/, '编辑文件'],
   [/^DELETE \/instances\/\*\/files$/, '删除文件'],
   [/^POST \/instances\/\*\/files\/extract$/, '解压'],
@@ -117,6 +119,9 @@ function write(entry) {
  */
 function middleware(req, res, next) {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  /* 分片本身不记:一次上传有几十上百片,每片一条会把审计日志冲垮,而
+     "谁在什么时候传了什么"这件事 init 和 finish 已经说清楚了 */
+  if (req.path.endsWith('/files/upload/chunk')) return next();
   const startedAt = Date.now();
   res.on('finish', () => {
     // /api/stream 之类的长连接不记

@@ -5,8 +5,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const express = require('express');
-const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB } = require('../config');
+const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB, UPLOAD_CHUNK_MB } = require('../config');
 const { asyncHandler, dirSize } = require('../utils');
+const uploads = require('../uploads');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
 const playtime = require('../playtime');
@@ -83,10 +84,14 @@ const isBackupId = (id) => /^[\w.-]+\.tar\.gz$/.test(id);
 /**
  * 把请求体原样落到 dest(不引 multipart 依赖:前端一次传一个文件,
  * body 就是文件本身)。超过 max 字节立即掐断,返回已写入字节数。
+ *
+ * opts 直接透给 createWriteStream —— 分片上传要用 { flags:'r+', start: 偏移 }
+ * 往同一个临时文件的指定区间写。这里刻意做成一个函数而不是复制一份:下面
+ * fail() / unpipe / aborted 的处理很微妙,两份迟早会走样。
  */
-function receiveUpload(req, dest, max) {
+function receiveUpload(req, dest, max, opts = undefined) {
   return new Promise((resolve, reject) => {
-    const ws = fs.createWriteStream(dest);
+    const ws = fs.createWriteStream(dest, opts);
     let received = 0;
     let failed = null;
     const fail = (err) => {
@@ -1264,6 +1269,203 @@ router.post('/:iid/files/upload', asyncHandler(async (req, res) => {
   req.inst.log('INFO', `[MCSP] 已上传: ${rel} (${(size / 1048576).toFixed(2)} MB)`);
   if (name === 'server.properties') req.inst.invalidatePropsCache();
   res.json({ ok: true, name, size });
+}));
+
+/* ── 分片上传 ──
+ *
+ * 上面那条一次传完的路子,遇到把面板架在隧道 / Cloudflare Worker 后面的部署会挂:
+ * 这类链路在请求体 10 MB 出头就直接 502,请求根本到不了面板。于是给大文件加一条
+ * init → chunk ×N → finish 的路。小文件仍走上面那条(少两次往返)。
+ *
+ * 落盘见 src/uploads.js 的说明:一个临时文件,每片写自己的偏移。
+ *
+ * 权限:这几条都挂在 /:iid 下且非 GET,权限门(见文件上方 requiredLevel)会自动
+ * 判成 manager —— 和一次传完那条一致,不用也不该动 OPERATOR_WRITES。
+ */
+
+/** 提前拒绝时统一走这里:先把连接里剩下的 body 收掉,别让反代把 RST 翻成 502 */
+async function rejectChunk(req, res, status, error) {
+  if (!(await drainRequest(req))) res.on('finish', () => req.destroy());
+  res.set('Connection', 'close');
+  return res.status(status).json({ ok: false, error });
+}
+
+router.post('/:iid/files/upload/init', asyncHandler(async (req, res) => {
+  const { path: dir, name: rawName, size: rawSize, overwrite } = req.body || {};
+  const name = String(rawName || '');
+  if (!isSafeName(name)) return res.status(400).json({ ok: false, error: '文件名非法' });
+
+  const parent = safePath(req.inst, dir);
+  if (!parent) return res.status(400).json({ ok: false, error: '非法路径' });
+  let pst;
+  try { pst = await fsp.stat(parent); } catch { return res.status(404).json({ ok: false, error: '目录不存在' }); }
+  if (!pst.isDirectory()) return res.status(400).json({ ok: false, error: '目标不是目录' });
+
+  const size = Number(rawSize);
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    return res.status(400).json({ ok: false, error: '文件大小非法' });
+  }
+
+  const dest = path.join(parent, name);
+  if (fs.existsSync(dest)) {
+    if (!overwrite) return res.status(409).json({ ok: false, error: '同名文件已存在' });
+    if (fs.statSync(dest).isDirectory()) return res.status(409).json({ ok: false, error: '同名目录已存在' });
+  }
+
+  if (size > MAX_UPLOAD_MB * 1048576) {
+    return res.status(413).json({ ok: false, error: `文件超过上传大小上限 ${MAX_UPLOAD_MB} MB` });
+  }
+  const qerr = diskQuotaError(req, size / 1048576);
+  if (qerr) return res.status(403).json({ ok: false, error: qerr });
+
+  let s;
+  try {
+    s = await uploads.create({
+      iid: req.inst.id,
+      username: req.user.username,
+      parentRel: String(dir || '/'),
+      name,
+      tmpDir: parent,
+      size,
+      chunkSize: UPLOAD_CHUNK_MB * 1048576,
+      overwrite,
+    });
+  } catch (err) {
+    if (err.tooMany) return res.status(429).json({ ok: false, error: err.message });
+    throw err;
+  }
+
+  /* 配额按声明体积**全额预扣**,abort / GC 时退回。
+     只按片记或只在 finish 记的话,用户能同时开十个大上传 —— 每个 init 都因为
+     "还没人记账"而通过检查,合起来直接击穿配额。这正是 disk.bump 当初要堵的洞,
+     被并发重新打开了。宁可在途期间高报。 */
+  disk.bump(req.inst.id, size / 1048576);
+
+  res.json({
+    ok: true,
+    uploadId: s.uploadId,
+    chunkSize: s.chunkSize,   // 以服务端为准,前端不许拿自己的配置切片
+    chunks: s.chunks,
+    received: [],             // v1 恒为空;先占好位,将来加续传协议不用变
+  });
+}));
+
+router.post('/:iid/files/upload/chunk', asyncHandler(async (req, res) => {
+  const uploadId = String(req.query.uploadId || '');
+  if (!uploads.isUploadId(uploadId)) return rejectChunk(req, res, 400, 'uploadId 非法');
+
+  const s = uploads.get(uploadId, { iid: req.inst.id, username: req.user.username });
+  if (!s) return rejectChunk(req, res, 404, '上传会话不存在或已过期');
+  if (s.finishing) return rejectChunk(req, res, 409, '该上传正在合并,不能再收分片');
+
+  const index = Number(req.query.index);
+  if (!Number.isInteger(index) || index < 0 || index >= s.chunks) {
+    return rejectChunk(req, res, 400, '分片序号越界');
+  }
+  if (s.writing.has(index)) return rejectChunk(req, res, 409, '该分片正在写入');
+
+  /* 每片的**精确**期望长度(末片是余数)。只判上限是不够的:短于期望意味着文件
+     中间留了个零洞,却会一路 ok 到 rename —— 那是唯一会静默产出损坏文件的路径。 */
+  const start = index * s.chunkSize;
+  const expect = Math.min(s.chunkSize, s.size - start);
+
+  s.writing.add(index);
+  s.touchedAt = Date.now();
+  let written;
+  try {
+    written = await receiveUpload(req, s.tmp, expect, { flags: 'r+', start });
+  } catch (err) {
+    s.writing.delete(index);
+    if (err.tooLarge) return rejectChunk(req, res, 413, `分片超过约定大小(应为 ${expect} 字节)`);
+    // 临时文件被人从文件管理器里删了,或者磁盘满了 —— 都不是 500
+    if (err.code === 'ENOENT') return rejectChunk(req, res, 404, '上传会话的临时文件已丢失,请重新上传');
+    if (err.code === 'ENOSPC') return rejectChunk(req, res, 507, '磁盘空间不足,上传中断');
+    if (res.headersSent || req.destroyed) return;    // 客户端自己断的
+    return res.status(400).json({ ok: false, error: `分片写入失败: ${err.message}` });
+  }
+  s.writing.delete(index);
+
+  if (written !== expect) {
+    return rejectChunk(req, res, 400, `分片长度不符(应为 ${expect} 字节,实收 ${written})`);
+  }
+
+  if (!s.received[index]) { s.received[index] = 1; s.receivedCount++; }
+  s.touchedAt = Date.now();
+  res.json({ ok: true, index, received: s.receivedCount, total: s.chunks });
+}));
+
+router.post('/:iid/files/upload/finish', asyncHandler(async (req, res) => {
+  const uploadId = String((req.body || {}).uploadId || '');
+  if (!uploads.isUploadId(uploadId)) return res.status(400).json({ ok: false, error: 'uploadId 非法' });
+
+  const s = uploads.get(uploadId, { iid: req.inst.id, username: req.user.username });
+  if (!s) return res.status(404).json({ ok: false, error: '上传会话不存在或已过期' });
+  if (s.finishing) return res.status(409).json({ ok: false, error: '该上传已在合并中' });
+  /* 还有分片在写就不能收尾:rename 之后那个写流仍然连着同一个 inode,
+     用户会看到一个已经"完成"的文件还在自己变大 */
+  if (s.writing.size) return res.status(409).json({ ok: false, error: '仍有分片正在写入,请稍后' });
+  if (s.receivedCount !== s.chunks) {
+    return res.status(409).json({ ok: false, error: `分片不完整(${s.receivedCount}/${s.chunks}),不能合并` });
+  }
+  s.finishing = true;   // 必须在第一个 await 之前置位
+
+  /* init 到 finish 可能隔了几十分钟,期间父目录可能被删、改名,或者被换成一个
+     指向沙箱外的软链 —— safePath 的 realpath 校验正是为此存在,只在 init 查一次
+     等于没查。所以这里整套重来一遍。 */
+  const parent = safePath(req.inst, s.parentRel);
+  if (!parent) { await uploads.discard(uploadId); return res.status(400).json({ ok: false, error: '非法路径' }); }
+  let pst;
+  try { pst = await fsp.stat(parent); } catch {
+    await uploads.discard(uploadId);
+    return res.status(404).json({ ok: false, error: '目标目录已不存在,上传作废' });
+  }
+  if (!pst.isDirectory()) {
+    await uploads.discard(uploadId);
+    return res.status(400).json({ ok: false, error: '目标不是目录' });
+  }
+  // 父目录被改名的话 s.tmp 指向的已经是别处,再 rename 进来就越过了刚做的校验
+  if (path.dirname(s.tmp) !== parent) {
+    await uploads.discard(uploadId);
+    return res.status(409).json({ ok: false, error: '目标目录在上传期间发生变动,上传作废' });
+  }
+
+  const dest = path.join(parent, s.name);
+  if (fs.existsSync(dest)) {
+    if (!s.overwrite) {
+      await uploads.discard(uploadId);
+      return res.status(409).json({ ok: false, error: '同名文件在上传期间被创建,已取消(请重新上传并选择覆盖)' });
+    }
+    if (fs.statSync(dest).isDirectory()) {
+      await uploads.discard(uploadId);
+      return res.status(409).json({ ok: false, error: '同名目录已存在' });
+    }
+  }
+
+  /* 收尾前按声明体积截一刀:某一片被重传成更短的内容时,旧的长尾巴还留在文件里,
+     不截的话 rename 出去的就是个尾部带垃圾的文件 */
+  await fsp.truncate(s.tmp, s.size);
+  await fsp.rename(s.tmp, dest);
+  uploads.forget(uploadId);
+
+  /* 配额在 init 时已按 size 全额预扣,这里不重复记。覆盖写的话被顶掉的那份体积
+     成了多算的,交给 refresh 自愈(DELETE /files 也是这么处理的) */
+  if (s.overwrite) disk.refresh(req.inst.id);
+
+  const rel = path.posix.join(s.parentRel, s.name);
+  req.inst.log('INFO', `[MCSP] 已上传: ${rel} (${(s.size / 1048576).toFixed(2)} MB,${s.chunks} 个分片)`);
+  if (s.name === 'server.properties') req.inst.invalidatePropsCache();
+  res.json({ ok: true, name: s.name, size: s.size });
+}));
+
+router.post('/:iid/files/upload/abort', asyncHandler(async (req, res) => {
+  const uploadId = String((req.body || {}).uploadId || '');
+  /* 幂等:客户端是在说"这个我不要了",对一个本来就不存在的东西说这句话,
+     唯一正确的回应是"好" —— 让它 404 只会给断线重试添乱 */
+  if (uploads.isUploadId(uploadId)) {
+    const s = uploads.get(uploadId, { iid: req.inst.id, username: req.user.username });
+    if (s) await uploads.discard(uploadId);
+  }
+  res.json({ ok: true });
 }));
 
 router.delete('/:iid/files', asyncHandler(async (req, res) => {
