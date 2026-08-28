@@ -86,4 +86,34 @@ async function githubLatestTag(repo, fallback) {
 /** Express 异步路由包装:未捕获的 rejection 交给错误中间件而不是打崩进程 */
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-module.exports = { ts, stripAnsi, readJson, writeJson, dirSize, runCmd, downloadFile, githubLatestTag, asyncHandler };
+/**
+ * 一个 `-Xmx=xmxMB` 的 JVM 实际会向宿主机要多少内存(RSS 口径)。
+ *
+ * `-Xmx` 只管**堆**。Metaspace、Code Cache、线程栈、GC 自身的数据结构,以及 Netty 的
+ * direct buffer 全在堆外 —— MC 服务端的网络层就是 Netty,这块吃得不少。实测 `-Xmx4G`
+ * 的 Paper 稳定运行时 RSS 常在 4.5G 以上,重模组服更多。
+ *
+ * 所以按 Σ-Xmx 把宿主机排满,实际 RSS 之和一定会超,而超出来的那部分不会报错,
+ * 是 OOM killer 在半夜随机挑一个服务端杀掉 —— 沉默的故障比拒绝服务更难查。
+ *
+ * 余量取「百分比」与「固定下限」的较大值:小堆按比例算不够(1G 堆的 13% 只有 133M,
+ * 盖不住 Metaspace + CodeCache + 线程栈),大堆按固定值算又不够(重模组服 class 多、
+ * direct buffer 大)。两个参数都在系统设置里(thresholds),**同时设 0 就退回纯 Σ-Xmx**。
+ *
+ * settings 用惰性 require:settings.js 自己 require 了本文件,顶层 require 会成环。
+ * 同 disk.js 的 diskWarnPct 写法。
+ */
+function memOverheadMB(xmxMB) {
+  const t = require('./settings').get().thresholds;
+  const pct = Number.isFinite(t.memOverheadPct) ? t.memOverheadPct : 13;
+  const min = Number.isFinite(t.memOverheadMinMB) ? t.memOverheadMinMB : 512;
+  return Math.max(min, Math.round((xmxMB * pct) / 100));
+}
+
+/** 堆 + 堆外 = 这个实例真正要占的宿主机内存,配额就按这个数算 */
+const memFootprintMB = (xmxMB) => xmxMB + memOverheadMB(xmxMB);
+
+module.exports = {
+  ts, stripAnsi, readJson, writeJson, dirSize, runCmd, downloadFile, githubLatestTag, asyncHandler,
+  memOverheadMB, memFootprintMB,
+};
