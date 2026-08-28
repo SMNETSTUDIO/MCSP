@@ -454,6 +454,9 @@ body {
   background: linear-gradient(90deg, var(--blue), var(--green));
   transition: width 0.6s ease;
 }
+/* RSS 超过 -Xmx(堆外开销,常态)。条子已经满了,再拿颜色把"满"和"超了"分开 ——
+   否则两种情况在视觉上完全一样,而它们要做的处置完全不同 */
+.bar i.over { background: linear-gradient(90deg, var(--green), var(--amber)); }
 
 .pill {
   display: inline-flex; align-items: center; gap: 7px;
@@ -1444,6 +1447,10 @@ body {
   background: linear-gradient(180deg, #7ce658 0 40%, #3f9e4d 40%);   /* XP 条质感 */
   transition: width 0.3s steps(8);
 }
+/* RSS 超 -Xmx 的琥珀色态。必须在这儿再写一遍:`.bar i.over` 和
+   `[data-style="pixel"] .bar i` 特指度都是 (0,2,1),平手时后写的赢 ——
+   只加前面那条的话,像素风下这个状态完全不生效(条子照样是绿的) */
+[data-style="pixel"] .bar i.over { background: linear-gradient(180deg, #ffe066 0 40%, #c8a415 40%); }
 [data-style="pixel"] .stat-chip { box-shadow: inset 2px 2px 0 rgba(255,255,255,0.2), inset -2px -2px 0 rgba(0,0,0,0.3); border: 2px solid #000; }
 
 /* 渐变文字改为实色(渐变裁切在像素风里发虚) */

@@ -745,7 +745,11 @@
             <input id="user-lim-cpu" type="number" min="1" placeholder="CPU 核数(默认 2)" />
             <input id="user-lim-disk" type="number" min="0" step="1024" placeholder="磁盘配额 MB(默认 20480,0=不限)" />
           </div>
-          <div class="dim small" style="margin-top:10px">普通用户只能看到自己的实例,管理员不受配额限制。内存按全部实例 -Xmx 之和计,CPU 在启动时绑核,磁盘含实例目录与备份。</div>
+          <div class="dim small" style="margin-top:10px">普通用户只能看到自己的实例,管理员不受配额限制。CPU 在启动时绑核,磁盘含实例目录与备份。<br>
+            内存按<b>全部实例 -Xmx 之和 + 每个实例一份堆外余量</b>计,不是裸 -Xmx 之和 —— <code>-Xmx</code> 只管堆,
+            JVM 还要 Metaspace、Code Cache、线程栈和 Netty direct buffer,实测 <code>-Xmx4G</code> 的 Paper
+            RSS 常在 4.5G 以上。所以<b>实例卡片上的内存读数高于它的 -Xmx 是正常的</b>,不是内存泄漏。
+            余量大小在「系统设置 → 阈值」里调。</div>
         </div>
         <div class="card glass" style="margin-top:18px">
           <h2 class="card-title">邀请链接 <span class="dim small">一次性,自带配额,不受「开放注册」影响</span></h2>
@@ -804,6 +808,8 @@
             <div class="prop-row"><label>崩溃计数窗口(分钟)<span class="dim small">1–1440</span></label><input id="sys-crash-win" type="number" min="1" max="1440" /></div>
             <div class="prop-row"><label>窗口内最多自动重启<span class="dim small">0 = 关闭自动重启</span></label><input id="sys-crash-max" type="number" min="0" max="100" /></div>
             <div class="prop-row"><label>崩溃后重启延迟(秒)<span class="dim small">1–3600</span></label><input id="sys-crash-delay" type="number" min="1" max="3600" /></div>
+            <div class="prop-row"><label>内存配额堆外余量 %<span class="dim small">占 -Xmx 的比例,0–100</span></label><input id="sys-mem-pct" type="number" min="0" max="100" /></div>
+            <div class="prop-row"><label>内存配额堆外余量下限 MB<span class="dim small">与上一项取较大值,0–4096</span></label><input id="sys-mem-min" type="number" min="0" max="4096" step="64" /></div>
           </div>
           <div class="prop-row" style="margin-top:14px">
             <label>公告<span class="dim small">留空不显示</span></label>
@@ -821,7 +827,12 @@
             要关请先关策略。<br>
             API Token 不受此开关影响,否则开启的瞬间所有脚本都会断;签发新 Token 需要网页会话,
             所以没配 2FA 的人也绕不过去。<br>
-            崩溃阈值按实例类型调:重度模组服启动慢、崩得勤,3 次/10 分钟容易误判成"重启风暴"而停手。
+            崩溃阈值按实例类型调:重度模组服启动慢、崩得勤,3 次/10 分钟容易误判成"重启风暴"而停手。<br>
+            <b>内存配额堆外余量</b>:<code>-Xmx</code> 只管堆,而 JVM 还要 Metaspace、Code Cache、线程栈、
+            GC 自身结构和 Netty 的 direct buffer(MC 服务端的网络层就是 Netty)—— 实测 <code>-Xmx4G</code>
+            的 Paper 稳定运行 RSS 常在 4.5G 以上,重模组服更多。配额按<b>堆 + 堆外</b>计,否则按 -Xmx 之和
+            把宿主机排满,实际内存一定会超,而超出的部分不会报错,是 OOM killer 半夜随机挑一个服务端杀掉。
+            余量取「百分比」与「下限 MB」的较大值。<b>两项同时设 0 就退回纯 -Xmx 之和</b>(旧行为)。
           </div>
         </div>
 
@@ -958,7 +969,7 @@
               <label class="switch prop-switch"><input type="checkbox" id="og-autocreate"><span class="slider"></span></label>
             </div>
             <div class="prop-row"><label>建号配额:实例数上限</label><input id="og-lim-inst" type="number" min="1" max="12" /></div>
-            <div class="prop-row"><label>建号配额:内存 MB(全部实例 -Xmx 之和)</label><input id="og-lim-mem" type="number" min="512" max="65536" step="256" /></div>
+            <div class="prop-row"><label>建号配额:内存 MB(全部实例 -Xmx 之和 + 堆外余量)</label><input id="og-lim-mem" type="number" min="512" max="65536" step="256" /></div>
             <div class="prop-row"><label>建号配额:CPU 核数</label><input id="og-lim-cpu" type="number" min="1" /></div>
             <div class="prop-row"><label>建号配额:磁盘 MB(0 = 不限)</label><input id="og-lim-disk" type="number" min="0" step="1024" /></div>
           </div>
@@ -979,7 +990,7 @@
       <div class="field-col">
         <label class="dim small">实例数上限</label>
         <input id="lim-inst" type="number" min="1" max="12" />
-        <label class="dim small">内存配额 MB</label>
+        <label class="dim small">内存配额 MB <span class="dim">按 -Xmx 之和 + 堆外余量计</span></label>
         <input id="lim-mem" type="number" min="512" max="65536" step="256" />
         <label class="dim small">CPU 核数</label>
         <input id="lim-cpu" type="number" min="1" />
