@@ -65,6 +65,11 @@ server.js(入口,10 行)
   - CPU/RSS 每 2s 从 `/proc/<pid>/stat|status` 采样,两档保留:秒级 150 点(≈5 分钟,实时曲线)+
     分钟级 1440 点(24 小时)。分钟档同时存均值**和峰值** —— 只存均值会把瞬时尖峰抹平,
     而排查 OOM 时要看的恰恰是尖峰。都在内存,面板重启即丢
+  - **口径**:采到的是 `VmRSS`,而 `metrics.ramMax` 是 `-Xmx`(堆)。两者不同口径,
+    `ram > ramMax` 是**常态** —— 差额是 Metaspace / Code Cache / 线程栈 / GC 结构 /
+    Netty direct buffer。仪表盘的内存条原先 `Math.min(100, …)` 一夹就永久钉在 100%,
+    等于把"健康的堆外开销"和"真要 OOM 了"渲染成同一个样子;现在超出部分换色并标注增量。
+    配额侧同理走 `utils.memFootprintMB()` 折算,见下面「内存配额的口径」
 - **隧道进程**(独立于服务端,重启实例不断线):ngrok / frpc / playit / bore /
   Pinggy / Serveo 六种驱动,统一输出解析(`\r`/`\n` 双分隔 + ANSI 清洗),
   公网地址就绪后 4s 自动做一次 mcPing 连通性验证,失败原因写入 `tunnelError`
@@ -111,6 +116,28 @@ Fabric/Forge 的模组配置数量不定,额外扫一层 `config/`。
 
 协作者能操作实例,但**不能删实例、不能改协作者名单**(`isOwnerOrAdmin`)。
 删除用户时会把他从所有实例的名单里摘掉,否则残留一个已不存在的用户名。
+
+## 内存配额的口径(src/utils.js)
+
+`utils.memFootprintMB(xmx)` = `xmx + max(memOverheadMinMB, xmx × memOverheadPct%)`,
+是内存配额**唯一**的折算入口(`quotaError`、`usageOf`、`/api/host` 的 `committedMem` 都走它)。
+
+为什么不能直接用 `-Xmx` 累加:`-Xmx` 只管堆,JVM 还要 Metaspace、Code Cache、线程栈、
+GC 自身结构和 Netty 的 direct buffer —— MC 服务端网络层就是 Netty,这块不小。
+实测 `-Xmx4G` 的 Paper 稳定运行 RSS 常在 4.5G 以上,重模组服更多。按 Σ-Xmx 把宿主机排满,
+实际 RSS 之和必超,**而超出的部分不会报错**:是 OOM killer 半夜随机挑一个服务端杀掉。
+沉默的超卖比当场拒绝难查得多。
+
+余量取百分比与固定下限的**较大值**:小堆按比例算不够(1G 的 13% 只有 133M,盖不住
+Metaspace + CodeCache + 线程栈),大堆按固定值算又不够(模组服 class 多、direct buffer 大)。
+两个参数在 `settings.thresholds` 里,**同时设 0 即退回纯 Σ-Xmx**——
+这是逃生阀,给"我自己知道我在超卖"的部署留的。
+
+`settings` 用惰性 `require`:`settings.js` 自己 require 了 `utils.js`,顶层 require 会成环。
+
+配额只在**内存往上加**时校验(`PATCH` 里 `if (mb > inst.xmx)`)。持平和缩小一律放行 ——
+前端保存实例设置时总会带上 `xmx`,不这么写的话,管理员一旦调低某人配额、或者口径变严,
+已超额的用户会连改个实例名都 403,而"把内存调小自救"这条唯一出路恰好被同一条拦住。
 
 ## 磁盘用量(src/disk.js)
 
