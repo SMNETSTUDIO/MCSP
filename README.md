@@ -26,7 +26,7 @@ from that process. No Java pre-install, no public IP required.
 
 ## ✨ 功能 Features
 
-<sub>按主题折叠,点开看细节。每条都写了它**拒绝**做什么 —— 那通常比它能做什么更值得看。</sub><br>
+<sub>按主题折叠,点开看细节。每条都写了它**拒绝**做什么 —— 那通常比它能做什么更值得看。</sub>
 <sub>Grouped and collapsed. Every entry also states what it deliberately refuses to do.</sub>
 
 <details>
@@ -131,55 +131,52 @@ from that process. No Java pre-install, no public IP required.
 
 ## 🚀 快速开始 Quick Start
 
-### 一行安装 One-Line Install
-
-服务器(或 VPS)上直接复制运行,自动拉取源码 → 装 Node → 装依赖 → PM2 常驻:
+在服务器(或 VPS)上复制运行 —— 自动拉源码 → 装 Node → 装依赖 → PM2 常驻:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/SMNETSTUDIO/MCSP/main/scripts/install.sh)"
 ```
 
-自定义安装目录 / 端口:
+打开 `http://localhost:3000`,默认账户 **`admin` / `admin123`** —— **请立即修改**。
+<sub>Open `http://localhost:3000`, default account `admin` / `admin123` — change it immediately.</sub>
+
+**Java 不用预装**:总览页点「⬇ 一键安装」下载 Temurin 25/21/17/8,实例启动时按 MC 版本自动匹配(26+ → 25,1.20.5+ → 21,1.17+ → 17,≤1.16 → 8)。
+<sub>No Java pre-install: grab Temurin from the Overview page; the runtime is auto-matched per MC version.</sub>
+
+<details>
+<summary><b>其他安装方式</b> <i>Other install methods</i> — <sub>Docker · deploy.sh · 手动 · 自定义目录/端口</sub></summary>
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/SMNETSTUDIO/MCSP/main/scripts/install.sh)" -- --dir ~/mcsp --port 8080
-```
-
-### Docker 一键部署 One-Click Deploy
-
-```bash
+# Docker —— compose 或直接用预构建镜像 compose, or the prebuilt image
 docker compose up -d --build
-# 或直接使用镜像 or use the prebuilt image
 docker run -d --name mcsp -p 3000:3000 -p 25565:25565 \
   -v mcsp-data:/app/data -v mcsp-instances:/app/instances \
   -v mcsp-backups:/app/backups -v mcsp-bin:/app/bin \
   ghcr.io/smnetstudio/mcsp:latest
+
+# 一键脚本 script deploy —— 装 Node(缺失时)→ 依赖 → PM2 → 健康检查
+bash scripts/deploy.sh
+bash scripts/deploy.sh --port 8080       # 自定义端口 custom port
+bash scripts/deploy.sh --foreground      # 前台运行(调试)foreground (debug)
+
+# 手动 manual —— 需要 Node.js ≥ 18 与 Linux(指标读 /proc)
+npm install && npm start                 # 或 npm run pm2 常驻 or run under PM2
+
+# 一行安装的自定义目录/端口 custom dir & port for the one-liner
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/SMNETSTUDIO/MCSP/main/scripts/install.sh)" -- --dir ~/mcsp --port 8080
 ```
 
-打开 / Open `http://localhost:3000`,默认账户 / default account **`admin` / `admin123`**(请立即修改 / change it immediately)。
+</details>
 
-### 一键脚本 Script Deploy
+<details>
+<summary><b>接下来做什么</b> <i>First steps</i> — <sub>建实例 · 外置登录</sub></summary>
 
-```bash
-bash scripts/deploy.sh                 # 自动装 Node(缺失时)→ 装依赖 → PM2 常驻 → 健康检查
-bash scripts/deploy.sh --port 8080     # 自定义端口 custom port
-bash scripts/deploy.sh --foreground    # 前台运行(调试)foreground (debug)
-```
+- **创建实例**:总览 →「＋ 新建实例」→ 选版本、勾选 EULA → 自动下载安装 → 启动
+  <sub>Overview → "+ New instance" → pick a version, accept the EULA → auto-install → start.</sub>
+- **外置登录**:实例 → 设置 → 打开「外置登录」并填 Yggdrasil API(如 `https://littleskin.cn/api/yggdrasil`)
+  <sub>Instance → Settings → enable external auth and fill in the Yggdrasil API URL.</sub>
 
-### 手动启动 Manual
-
-```bash
-# 依赖 Requirements: Node.js ≥ 18, Linux(指标读取 /proc)
-npm install
-npm start                    # http://localhost:3000
-npm run pm2                  # 或 PM2 常驻 or run under PM2
-```
-
-- **Java 无需预装**:登录面板 → 总览 → Java →「⬇ 一键安装」,自动下载 Temurin 25/21/17/8 到 `bin/java/`,实例启动按 MC 版本自动匹配(26+ → 25,1.20.5+ → 21,1.17+ → 17,≤1.16 → 8)
-  **No Java pre-install needed**: install Temurin from the Overview page; the runtime is auto-matched per MC version.
-- 创建实例:总览 →「＋ 新建实例」→ 选版本、勾选 EULA → 自动下载安装 → 启动
-- 外置登录:实例 → 设置 → 打开「外置登录」并填 Yggdrasil API(如 `https://littleskin.cn/api/yggdrasil`)
-  External auth: Instance → Settings → enable and fill the Yggdrasil API URL.
+</details>
 
 ## 🧱 架构 Architecture
 
@@ -188,15 +185,6 @@ npm run pm2                  # 或 PM2 常驻 or run under PM2
                     │  SSE 日志/状态流 log & state stream       │ stdout 解析 / stdin 命令
                     │                                           └► /proc/<pid> 指标 metrics
                     └► 每实例独立隧道进程 per-instance tunnel(bore / playit / Pinggy / Serveo / ngrok / frpc)
-
-src/
-  app.js 装配 · auth.js 认证 · oauth.js OAuth2 · instance.js 核心领域对象
-  registry.js 注册表 · tasks.js 调度 · backups.js 备份(全量 + 增量链)· tunnels.js 穿透组件
-  authlib.js 外置登录 · archive.js 压缩包(zip 自读写 / tar 调系统 tar)
-  remotebackup.js 异地备份(S3 SigV4 手写 / WebDAV / rclone)
-  invites.js 邀请链接 · playtime.js 在线时长 · panelbackup.js 面板配置导出导入
-  routes/  users / host / tunnel / instances
-public/    原生 JS 前端,零依赖 vanilla JS frontend, zero deps
 ```
 
 权限模型 Permission model:
@@ -213,26 +201,29 @@ public/    原生 JS 前端,零依赖 vanilla JS frontend, zero deps
 
 进程生命周期:`spawn(java …)` → 解析 stdout(`Done (…)!` 判定 running,joined/left 维护玩家表)→ `stop` 写 stdin 优雅关闭(30s 超时强杀)→ exit 复位。面板退出时向所有子进程发送 stop,保证世界落盘。
 
-详见 / See [ARCHITECTURE.md](ARCHITECTURE.md)。
-
-## 📁 仓库结构 Repository Structure
+<details>
+<summary><b>运行时目录</b> <i>Runtime layout</i> — <sub>实例 · 备份链 · 持久化数据落在哪</sub></summary>
 
 ```
-server.js              入口 entry (10 lines)
-src/                   后端分层模块 backend modules
-public/                前端 frontend(vanilla JS)
-scripts/deploy.sh      一键部署 one-click deploy
-scripts/smoke.js       npm test — 115 项冒烟回归 smoke suite(压缩往返 + 实例级 + 多租户/权限边界)
 instances/<id>/        每实例一个真实服务端目录 real server dir per instance
   └ logs/mcsp-console.log  控制台日志落盘 persisted console log(16 MB 轮转 rotated)
 backups/<id>/          真实备份 real backups
   ├ *.tar.gz               全量与增量包 full & incremental archives
   ├ .mcsp-chains.json      增量链元数据 chain metadata(谁基于谁)
   └ .snar/                 GNU tar 增量快照 incremental snapshots
-data/                  users / sessions / instances / tasks / invites / crashes / playtime(持久化 persisted)
+data/                  持久化状态 persisted state(逐文件说明见 ARCHITECTURE)
+bin/                   穿透组件 tunnel binaries
+  └ java/                  一键安装的 Temurin 运行时 Temurin runtimes (one-click install)
+scripts/deploy.sh      一键部署 one-click deploy
+scripts/smoke.js       npm test — 冒烟回归 smoke suite(压缩往返 + 实例级 + 多租户/权限边界)
 Dockerfile             容器镜像 container image(node:22-slim + tar/bzip2/xz/ssh/taskset)
 ecosystem.config.js    PM2 配置 PM2 config(fork + JAVA_BIN)
 ```
+
+</details>
+
+**模块清单、数据持久化、安全边界、测试策略详见 [ARCHITECTURE.md](ARCHITECTURE.md)** —— 那里每个 `src/` 模块都有一行说明和依赖方向,不在这里重复一遍。
+<sub>Per-module breakdown, persistence, security boundaries and test strategy live in [ARCHITECTURE.md](ARCHITECTURE.md).</sub>
 
 ## ✅ 验收 Acceptance
 
@@ -242,16 +233,16 @@ npm test          # scripts/smoke.js — 压缩模块本地往返 + 对运行中
 ```
 
 CI 在每次 push 时启动面板并跑完整冒烟;Docker 镜像由 Actions 构建并推送 GHCR。
-CI boots the panel and runs the full smoke suite on every push; Docker images are built & pushed to GHCR by Actions.
+<sub>CI boots the panel and runs the full smoke suite on every push; Docker images are built & pushed to GHCR by Actions.</sub>
 
 ## ⚠️ 提示 Notes
 
 - 安装服务端时写入 `eula=true`,代表**你**同意 [Minecraft EULA](https://aka.ms/MinecraftEULA)(创建实例时需勾选确认)。
-  Installing a server writes `eula=true`, meaning **you** accept the Minecraft EULA (confirmed at instance creation).
-- 面板未内置 HTTPS/反代,公网部署请置于 Nginx/Caddy 之后并修改默认密码。
-  No built-in HTTPS/reverse proxy — put it behind Nginx/Caddy and change the default password before going public.
+  <sub>Installing a server writes `eula=true`, meaning **you** accept the Minecraft EULA (confirmed at instance creation).</sub>
+- 面板**未内置 HTTPS/反代**,公网部署请置于 Nginx/Caddy 之后并修改默认密码。
+  <sub>No built-in HTTPS/reverse proxy — put it behind Nginx/Caddy and change the default password before going public.</sub>
 - 内网穿透与外置登录组件(bore/frpc/ngrok/playit、authlib-injector)均从官方源下载,遵守各自服务条款。
-  Tunnel & auth components are downloaded from official sources; comply with their respective terms.
+  <sub>Tunnel & auth components are downloaded from official sources; comply with their respective terms.</sub>
 
 ## 📄 许可证 License
 
