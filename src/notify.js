@@ -10,6 +10,7 @@
  *  · 目标地址由管理员配置,发送前校验协议,避免被当成内网探测器。
  */
 const settings = require('./settings');
+const { checkOutboundUrl } = require('./utils');
 
 const TIMEOUT_MS = 8000;
 const DEDUPE_MS = 5 * 60_000;
@@ -40,11 +41,17 @@ function shouldSend(event, key) {
 }
 
 async function postJson(url, body) {
+  /* 三个通道都经过这里,内网校验就放在这一层 —— 以后加新通道自动覆盖。
+     不挡的话「测试推送」就是个带回显的内网探测器:填 http://127.0.0.1:25575
+     或 http://169.254.169.254/,靠响应时间和错误文本就能区分端口开没开。 */
+  const bad = await checkOutboundUrl(url, { label: '推送地址' });
+  if (bad) throw new Error(bad);
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(TIMEOUT_MS),
+    redirect: 'error',        // 不跟随跳转 —— 302 到内网能绕过上面这道校验
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }

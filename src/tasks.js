@@ -88,6 +88,14 @@ function startScheduler() {
     const now = new Date();
     for (const task of store.tasks) {
       if (!task.enabled) continue;
+      /* 时钟往回拨(NTP 校正、手改系统时间)会让 lastRun 落在未来,于是
+         `Date.now() - lastRun` 恒为负 —— interval 任务在时钟追上来之前**完全不执行**,
+         daily 的 90 秒去重窗口同理失效,而界面上 enabled 还是 true,看不出异常。
+         统一钳一下:未来的 lastRun 拉回当下。 */
+      if (task.lastRun && task.lastRun > Date.now()) {
+        task.lastRun = Date.now();
+        saveTasks();
+      }
       if (task.schedule.type === 'interval') {
         const base = task.lastRun || task.createdAt;
         if (Date.now() - base >= task.schedule.minutes * 60000) runTask(task).catch(() => {});

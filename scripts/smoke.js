@@ -16,10 +16,14 @@ const TOTP_SECRET = process.argv[5] || process.env.MCSP_SMOKE_TOTP || '';
 let cookie = '';
 let passed = 0, failed = 0;
 
-async function req(method, path, body) {
+async function req(method, path, body, extraHeaders) {
   const res = await fetch(BASE + path, {
     method,
-    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(cookie ? { Cookie: cookie } : {}),
+      ...(extraHeaders || {}),      // 模拟浏览器的 Origin / Sec-Fetch-Site,测 CSRF 用
+    },
     body: body ? JSON.stringify(body) : undefined,
     redirect: 'manual',
   });
@@ -241,6 +245,20 @@ async function collabRoleSuite(iid) {
   // operator:能做日常运维,但改不了配置
   check('collab operator: 可建备份', (await as(users.operator, 'POST', '/backups')) === 200);
   check('collab operator: 禁止改配置', (await as(users.operator, 'PATCH', '', { name: 'x' })) === 403);
+  /* 启停的真实路由是 /server/:action。OPERATOR_WRITES 原先写的是 /^\/(start|…)$/,
+     永不匹配,启停于是被判成 manager —— operator 档形同虚设,想给人启停权就只能
+     给 manager(而 manager 能改文件改配置)。不是 200 就是没走到业务逻辑:
+     这里只要求"不是 403",实例没装完 start 返回失败也算通过。 */
+  check('collab operator: 可启停(路由是 /server/:action,别再写成 /start)',
+    (await as(users.operator, 'POST', '/server/stop')) !== 403);
+
+  // viewer 不该读到凭据:这几条 GET 会吐出 rcon 密码 / 整个 server.properties / 任意文件
+  check('collab viewer: 禁止读 rcon 密码', (await as(users.viewer, 'GET', '/rcon')) === 403);
+  check('collab viewer: 禁止读 server.properties', (await as(users.viewer, 'GET', '/properties')) === 403);
+  check('collab viewer: 禁止读任意文件内容',
+    (await as(users.viewer, 'GET', '/files/content?path=%2Fserver.properties')) === 403);
+  check('collab viewer: 仍读得到日志(没有误伤只读本职)',
+    (await as(users.viewer, 'GET', '/logs')) === 200);
 
   // manager:配置也能改,但仍然碰不到所有权级操作
   check('collab manager: 可改配置', (await as(users.manager, 'PATCH', '', {})) === 200);
@@ -368,6 +386,88 @@ async function finalizeImportShell(iid) {
     await req('POST', `/api/instances/${iid}/import/finalize`, { archive: '/srv.zip', eula: true });
   } finally {
     await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 安全边界:CSRF、SSRF、凭据回显。
+ *
+ * 这三样都是"不做也能正常跑"的东西 —— 正因如此才要有用例钉住,
+ * 否则哪天有人为了省事把校验去掉,功能测试一条都不会红。
+ */
+async function securitySuite() {
+  const MASK = '••••••••';
+  let r;
+
+  /* ── CSRF ──
+     面板全靠 Cookie 会话,而 Cookie 是浏览器自动附带的。没有这道校验,
+     任何网页都能在管理员登录着的时候对面板发 POST。 */
+  r = await req('PUT', '/api/settings', { announcement: 'csrf-probe' }, { 'Sec-Fetch-Site': 'cross-site' });
+  check('csrf: 跨站请求被拒(Sec-Fetch-Site)', r.status === 403 && r.json && r.json.code === 'csrf',
+    `${r.status} ${JSON.stringify(r.json)}`);
+
+  r = await req('PUT', '/api/settings', { announcement: 'csrf-probe' }, { Origin: 'https://evil.example.com' });
+  check('csrf: 伪造 Origin 被拒', r.status === 403, `${r.status} ${JSON.stringify(r.json)}`);
+
+  r = await req('PUT', '/api/settings', { announcement: '' }, { 'Sec-Fetch-Site': 'same-origin' });
+  check('csrf: 同源请求放行(没误伤正常前端)', r.status === 200, `${r.status} ${JSON.stringify(r.json)}`);
+
+  r = await req('GET', '/api/host', undefined, { 'Sec-Fetch-Site': 'cross-site' });
+  check('csrf: GET 不受影响(只拦状态变更)', r.status === 200, String(r.status));
+
+  /* ── SSRF ──
+     "测试推送"会把每个通道的错误回显,不挡内网的话它就是个带回显的端口探测器。 */
+  for (const [label, url] of [
+    ['环回', 'http://127.0.0.1:25575/x'],
+    ['云元数据', 'http://169.254.169.254/latest/meta-data/'],
+    ['内网段', 'http://10.0.0.5/hook'],
+  ]) {
+    r = await req('POST', '/api/settings/notify/test', {
+      notify: { enabled: true, webhookUrl: url, discordUrl: '', telegramToken: '', telegramChatId: '' },
+    });
+    const results = (r.json && r.json.results) || [];
+    const blocked = results.some((x) => !x.ok && /内网|环回|localhost|拒绝/.test(x.error || ''));
+    check(`ssrf: ${label}地址被拒(${url.slice(0, 32)}…)`, blocked, JSON.stringify(results));
+  }
+
+  /* ── 凭据回显 ──
+     backupRemote 早就掩码了,notify 里的 webhook / bot token 之前是明文返回的。 */
+  await req('PUT', '/api/settings', {
+    notify: {
+      enabled: false, webhookUrl: 'https://example.com/hook?token=s3cr3t',
+      discordUrl: '', telegramToken: 'bot-token-should-not-echo', telegramChatId: '123',
+    },
+  });
+  r = await req('GET', '/api/settings');
+  const n = (r.json && r.json.notify) || {};
+  check('mask: telegramToken 不明文回显', n.telegramToken === MASK, JSON.stringify(n.telegramToken));
+  check('mask: webhookUrl 不明文回显', n.webhookUrl === MASK, JSON.stringify(n.webhookUrl));
+
+  // 掩码原样传回来不能把真值抹掉,否则改个 chatId 就会把 token 洗成一串圆点
+  await req('PUT', '/api/settings', {
+    notify: { enabled: false, webhookUrl: MASK, discordUrl: '', telegramToken: MASK, telegramChatId: '456' },
+  });
+  r = await req('POST', '/api/settings/notify/test', {
+    notify: { enabled: true, webhookUrl: MASK, discordUrl: '', telegramToken: '', telegramChatId: '' },
+  });
+  const msg = JSON.stringify((r.json && r.json.results) || []);
+  check('mask: 掩码回传后真值仍在(报错不是"不是合法 URL")', !/不是合法 URL/.test(msg), msg);
+
+  // 收尾:把 notify 清空,别给下次运行留状态
+  await req('PUT', '/api/settings', {
+    notify: { enabled: false, webhookUrl: '', discordUrl: '', telegramToken: '', telegramChatId: '' },
+  });
+
+  /* 中途放弃的导入空壳要能删掉。它的 state 是 importing,唯一出路 finalize
+     需要一个有效压缩包 —— 原先 DELETE 只放行 stopped,于是这个空壳既用不了也删不掉,
+     只能靠"重启面板让 state 变回 stopped"这种非显然的办法脱身。 */
+  r = await req('POST', '/api/instances/import', { name: 'smoke-abandoned', xmx: 512 });
+  const aid = r.json && r.json.instance && r.json.instance.id;
+  check('import: 建空壳', !!aid && r.json.instance.state === 'importing', JSON.stringify(r.json));
+  if (aid) {
+    r = await req('DELETE', `/api/instances/${aid}`);
+    check('import: 放弃的空壳可以直接删(不必重启面板)',
+      r.status === 200 && r.json && r.json.ok, `${r.status} ${JSON.stringify(r.json)}`);
   }
 }
 
@@ -889,6 +989,8 @@ async function uniqueNameRoundtrip() {
      这一段专门覆盖"跨用户"和"权限边界",单用户的 happy path 测不到这些。
      全部在 admin 会话下建资源、切到普通用户会话验证隔离,最后清理干净。 */
   if (isAdmin) await multiTenantSuite();
+
+  if (isAdmin) await securitySuite();
 
   // 畸形 JSON 应该是 400(客户端错),不是 500
   {

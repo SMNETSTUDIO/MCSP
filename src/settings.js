@@ -110,6 +110,27 @@ function maskRemote(r) {
   };
 }
 
+/* 推送目标同样是凭据,口径要和 maskRemote 一致。
+   telegramToken 拿到就能以这个 bot 的身份发消息;Discord webhook URL **本身**
+   就是凭据(持有即可往那个频道发);通用 webhook 地址里也常带 token 查询参数。
+   之前只掩了 backupRemote,这三个是原样返回的 —— 虽然只给管理员,
+   但没有理由同一个响应里一半掩一半不掩。 */
+function maskNotify(n) {
+  return {
+    ...n,
+    webhookUrl: n.webhookUrl ? MASK : '',
+    discordUrl: n.discordUrl ? MASK : '',
+    telegramToken: n.telegramToken ? MASK : '',
+  };
+}
+
+/** GET 给管理员的完整视图:两处凭据都掩码 */
+const adminView = () => ({
+  ...settings,
+  backupRemote: maskRemote(settings.backupRemote),
+  notify: maskNotify(settings.notify),
+});
+
 /* 普通用户只该看到影响自己的那几项。notify 里存着 webhook 地址和 Telegram
    Bot Token —— 之前这个接口对任何登录用户都全量返回,等于把推送凭据发给租户。 */
 function publicView(s) {
@@ -123,7 +144,7 @@ function publicView(s) {
 }
 
 router.get('/', (req, res) => res.json(req.user.role === 'admin'
-  ? { ...settings, backupRemote: maskRemote(settings.backupRemote) }
+  ? adminView()
   : publicView(settings)));
 
 router.put('/', requireAdmin, (req, res) => {
@@ -199,24 +220,37 @@ router.put('/', requireAdmin, (req, res) => {
   if (b.notify && typeof b.notify === 'object') {
     const n = b.notify;
     const str = (v, max) => String(v || '').trim().slice(0, max);
+    // 掩码原样传回来 = 没改,保留旧值 —— 否则管理员改个 chatId 就会把
+    // webhook 地址和 bot token 全抹成一串圆点(backupRemote 那边同理)
+    const cur = settings.notify;
+    const keep = (v, max, old) => (v === MASK ? old : str(v, max));
     settings.notify = {
       enabled: !!n.enabled,
-      webhookUrl: str(n.webhookUrl, 500),
-      discordUrl: str(n.discordUrl, 500),
-      telegramToken: str(n.telegramToken, 200),
+      webhookUrl: keep(n.webhookUrl, 500, cur.webhookUrl),
+      discordUrl: keep(n.discordUrl, 500, cur.discordUrl),
+      telegramToken: keep(n.telegramToken, 200, cur.telegramToken),
       telegramChatId: str(n.telegramChatId, 64),
       events: { ...settings.notify.events, ...(n.events || {}) },
     };
   }
   save();
-  res.json({ ok: true, settings: { ...settings, backupRemote: maskRemote(settings.backupRemote) } });
+  res.json({ ok: true, settings: adminView() });
 });
 
 /* 测试推送:同步等结果,逐条回显哪个通道通了 */
 router.post('/notify/test', requireAdmin, async (req, res) => {
   const notify = require('./notify');
-  // 用请求体里的配置试,这样用户不用先保存再测
-  const cfg = (req.body && req.body.notify) || settings.notify;
+  // 用请求体里的配置试,这样用户不用先保存再测。
+  // 但 GET 回显的是掩码,原样传回来的字段要还原成已存的真值 ——
+  // 否则"没改过 token 直接点测试"会拿着一串圆点去请求,报一个莫名其妙的错
+  const raw = (req.body && req.body.notify) || settings.notify;
+  const un = (v, old) => (v === MASK ? old : v);
+  const cfg = {
+    ...raw,
+    webhookUrl: un(raw.webhookUrl, settings.notify.webhookUrl),
+    discordUrl: un(raw.discordUrl, settings.notify.discordUrl),
+    telegramToken: un(raw.telegramToken, settings.notify.telegramToken),
+  };
   res.json({ ok: true, results: await notify.test(cfg) });
 });
 

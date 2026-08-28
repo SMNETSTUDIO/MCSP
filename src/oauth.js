@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
+const { checkOutboundUrl } = require('./utils');
 const { DATA_DIR } = require('./config');
 const { readJson, writeJson } = require('./utils');
 const auth = require('./auth');
@@ -72,6 +73,13 @@ function authorizeUrl(req, state) {
 
 /** code 换 token 再取用户信息;返回稳定身份标识 oauthId */
 async function fetchIdentity(req, code) {
+  /* 这两个地址是管理员填的,面板拿着它们从**服务端**发请求 —— 指向内网就是 SSRF。
+     而且 token 请求会把 clientSecret 一起带过去,填错/被改成内网地址等于把密钥
+     送给那个地址。发之前校验一次。 */
+  for (const [url, label] of [[config.tokenUrl, 'OAuth token 端点'], [config.userInfoUrl, 'OAuth userinfo 端点']]) {
+    const bad = await checkOutboundUrl(url, { label });
+    if (bad) throw new Error(bad);
+  }
   // OAuth2 标准要求 token 端点用 form-urlencoded(linux.do 等不解析 JSON body)
   const tokenRes = await fetch(config.tokenUrl, {
     method: 'POST',

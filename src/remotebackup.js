@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
+const { checkOutboundUrl } = require('./utils');
 
 const UPLOAD_TIMEOUT_MS = 30 * 60_000;   // 几十 GB 的世界包走慢线路可能真要这么久
 
@@ -203,6 +204,14 @@ function validate(cfg) {
 async function upload(cfg, localPath, remoteKey) {
   const err = validate(cfg);
   if (err) throw new Error(err);
+  /* 内网校验放在这里而不是 validate():validate 是同步的,而 DNS 解析是异步的。
+     test() 也走 upload,所以「连通性自检」那条带回显的路径一并覆盖到了。
+     rclone 不填 URL(用的是本地 rclone config 里的 remote 名),跳过。 */
+  const target = cfg.type === 's3' ? cfg.endpoint : cfg.type === 'webdav' ? cfg.url : null;
+  if (target) {
+    const bad = await checkOutboundUrl(target, { label: cfg.type === 's3' ? 'S3 endpoint' : 'WebDAV 地址' });
+    if (bad) throw new Error(bad);
+  }
   const prefix = (cfg.prefix || '').replace(/^\/+|\/+$/g, '');
   const key = prefix ? `${prefix}/${remoteKey}` : remoteKey;
   if (cfg.type === 's3') return uploadS3(cfg, localPath, key);
