@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const express = require('express');
 const { DATA_DIR, BACKUPS_DIR, MAX_UPLOAD_MB, MAX_EXTRACT_MB, UPLOAD_CHUNK_MB } = require('../config');
-const { asyncHandler, dirSize } = require('../utils');
+const { asyncHandler, dirSize, memFootprintMB, memOverheadMB } = require('../utils');
 const uploads = require('../uploads');
 const { archiveKind, extractArchive, createArchive } = require('../archive');
 const disk = require('../disk');
@@ -274,15 +274,26 @@ function diskQuotaError(req, needMB) {
   return `磁盘配额不足:本次约需 ${needMB.toFixed(0)} MB,剩余 ${left.toFixed(0)} MB(配额 ${u.limits.maxDiskMB} MB)`;
 }
 
-/** 普通用户的配额检查;extraMB 为本次新增的内存需求(排除 excludeInst 自身占用) */
+/**
+ * 普通用户的配额检查;extraMB 为本次新增的**堆**上限(排除 excludeInst 自身占用)。
+ *
+ * 内存一律按 memFootprintMB 折算,也就是堆 + 堆外余量,而不是裸 -Xmx ——
+ * 配额要防的是宿主机内存被排满,而 JVM 向宿主机要的从来不止堆那一块。
+ * 按 Σ-Xmx 排满的结果是 OOM killer 半夜随机挑一个服务端杀掉。
+ */
 function quotaError(req, extraMB, newInstance, excludeInst) {
   if (req.user.role === 'admin') return null;
   const u = authUsers.find((x) => x.username === req.user.username);
   const lim = (u && u.limits) || { maxInstances: 0, maxMemMB: 0 };
   const mine = [...instances.values()].filter((i) => i.owner === req.user.username);
   if (newInstance && mine.length >= lim.maxInstances) return `实例数已达配额上限(${lim.maxInstances} 个)`;
-  const used = mine.reduce((s, i) => s + (excludeInst && i.id === excludeInst.id ? 0 : i.xmx), 0);
-  if (used + extraMB > lim.maxMemMB) return `内存配额不足:已用 ${used} MB + 本次 ${extraMB} MB > 配额 ${lim.maxMemMB} MB`;
+  const used = mine.reduce((s, i) => s + (excludeInst && i.id === excludeInst.id ? 0 : memFootprintMB(i.xmx)), 0);
+  const over = memOverheadMB(extraMB);
+  if (used + extraMB + over > lim.maxMemMB) {
+    /* 把堆和堆外拆开写。合成一个 "本次 4608 MB" 会让填了 4096 的人以为面板算错了,
+       而这恰恰是最需要解释清楚的一次 —— 用户就是在这里第一次撞见这个口径 */
+    return `内存配额不足:已用 ${used} MB + 本次 ${extraMB} MB(另需堆外 ${over} MB)> 配额 ${lim.maxMemMB} MB`;
+  }
   return null;
 }
 
@@ -406,8 +417,9 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     if (mb < 512 || mb > 65536) return res.status(400).json({ ok: false, error: '内存上限需在 512 ~ 65536 MB 之间' });
     /* 只在**往上加**的时候查配额,持平和缩小一律放行。
        前端保存实例设置时总会带上 xmx(哪怕用户只改了个名字),所以一旦管理员调低了
-       某人的配额,已经超额的用户会连改实例名都 403 —— 而"把内存调小自救"这条
-       唯一的出路,恰好也被同一条拦住。缩小是让账变好看的方向,没有理由挡它。 */
+       某人的配额、或者配额口径变严,已经超额的用户会连改实例名都 403 —— 而
+       "把内存调小自救"这条唯一的出路,恰好也被同一条拦住。
+       缩小是让账变好看的方向,没有理由挡它。 */
     if (mb > inst.xmx) {
       const qerr = quotaError(req, mb, false, inst);
       if (qerr) return res.status(403).json({ ok: false, error: qerr });

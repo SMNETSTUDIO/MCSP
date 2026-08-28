@@ -5,6 +5,7 @@ const { users, saveUsers, hashPassword, requireAdmin, dropUserSessions } = requi
 const { instances } = require('../registry');
 const disk = require('../disk');
 const invites = require('../invites');
+const { memFootprintMB } = require('../utils');
 
 const router = express.Router();
 router.use(requireAdmin);
@@ -26,10 +27,21 @@ function sanitizeLimits(l) {
   };
 }
 
-/** 某用户当前占用:实例数与内存(xmx 之和) */
+/**
+ * 某用户当前占用:实例数、内存、磁盘。
+ *
+ * 内存给两个数:memMB 是堆之和(用户在实例设置里填的 -Xmx,所见即所填),
+ * memReservedMB 是含堆外余量的实际预留 —— **后者才是配额真正拦人的那个数**。
+ * 只显示前者的话,用户会看到"2048/4096 还有一半"却被拒,然后开始排查一个不存在的 bug。
+ */
 function usageOf(username) {
   const mine = [...instances.values()].filter((i) => i.owner === username);
-  return { instances: mine.length, memMB: mine.reduce((s, i) => s + i.xmx, 0), diskMB: disk.userUsageMB(username) };
+  return {
+    instances: mine.length,
+    memMB: mine.reduce((s, i) => s + i.xmx, 0),
+    memReservedMB: mine.reduce((s, i) => s + memFootprintMB(i.xmx), 0),
+    diskMB: disk.userUsageMB(username),
+  };
 }
 
 router.get('/', (req, res) => {
