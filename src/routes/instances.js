@@ -325,7 +325,9 @@ function quotaError(req, extraMB, newInstance, excludeInst) {
 /* ── CRUD ── */
 
 router.get('/', (req, res) => {
-  res.json(visibleInstances(req).map((i) => i.snapshot()));
+  /* perm 加在路由层而不是 snapshot() 里:同一份 snapshot 还会经 SSE 广播给
+     权限不同的多个用户,把 perm 塞进去就会发错人。这里按**请求者**逐个算。 */
+  res.json(visibleInstances(req).map((i) => ({ ...i.snapshot(), perm: i.permOf(req.user) })));
 });
 
 /* 创建实例:普通用户也可以,但受资源配额约束(实例数/内存);实例归创建者所有 */
@@ -643,7 +645,8 @@ router.delete('/:iid', asyncHandler(async (req, res) => {
 
 /* ── 状态 / 日志 / 指标 / 进程控制 / 命令 ── */
 
-router.get('/:iid/status', (req, res) => res.json(req.inst.snapshot()));
+// perm 同上:按请求者算,不进 snapshot()
+router.get('/:iid/status', (req, res) => res.json({ ...req.inst.snapshot(), perm: req.perm }));
 /**
  * 控制台日志。默认回最后 300 行(前端首屏),支持:
  *   ?q=关键词   大小写不敏感的子串匹配

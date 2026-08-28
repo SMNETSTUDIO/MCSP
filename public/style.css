@@ -1563,6 +1563,29 @@ body {
 .task-result.ok { color: var(--green); }
 .task-result.bad { color: var(--amber); }
 
+/* 计划任务最近几次执行的结果点。用形状+颜色双编码,不只靠颜色 —— 色觉障碍下
+   纯绿/黄两个圆点是分不开的,失败的画成方块 */
+/* 权限不足的控件。保留在界面上而不是藏掉,是因为"有这个功能但你没权限"比
+   "什么都没有"更好解释 —— hover 的 title 会说清楚需要哪一档。
+   真正藏掉的只有协作者卡片(那是主人专属)。
+
+   透明度对齐上面已有的 `.btn:disabled`(0.35):那条规则特指度 (0,2,0) 本来就
+   压过这里的 (0,1,0),按钮走的一直是它。这里主要是给非 .btn 的控件(如命令输入框)
+   兜底,数值写成一样,免得输入框和按钮灰得深浅不同。
+   不加 filter —— .btn:disabled 明确写了 filter:none,加了也只在输入框上生效,
+   反而制造不一致。 */
+.perm-denied { opacity: 0.35; cursor: not-allowed !important; }
+.perm-denied:hover { transform: none; filter: none; }
+
+.run-history { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.run-dot {
+  display: inline-block; width: 9px; height: 9px;
+  border-radius: 50%; cursor: help;
+}
+.run-dot.ok  { background: var(--green); }
+.run-dot.bad { background: var(--amber); border-radius: 1px; }
+[data-style="pixel"] .run-dot { border-radius: 0; border: 1px solid #000; }
+
 /* ── 操作审计 ── */
 .audit-row {
   display: grid; grid-template-columns: 150px 90px 150px 46px 1fr;

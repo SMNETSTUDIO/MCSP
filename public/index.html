@@ -146,10 +146,10 @@
         <div class="top-actions">
           <div class="top-actions" id="inst-actions" hidden>
             <span class="pill pill-gray" id="top-state">已停止</span>
-            <button class="btn btn-green" id="btn-start"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>启动</button>
-            <button class="btn btn-amber" id="btn-restart"><svg class="ico" aria-hidden="true"><use href="#i-restart"/></svg>重启</button>
-            <button class="btn btn-red" id="btn-stop"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>停止</button>
-            <button class="btn btn-danger-outline" id="btn-kill" title="强制终止进程,存档可能损坏" aria-label="强杀:强制终止进程,存档可能损坏"><svg class="ico" aria-hidden="true"><use href="#i-kill"/></svg>强杀</button>
+            <button class="btn btn-green" id="btn-start" data-need="operator"><svg class="ico" aria-hidden="true"><use href="#i-play"/></svg>启动</button>
+            <button class="btn btn-amber" id="btn-restart" data-need="operator"><svg class="ico" aria-hidden="true"><use href="#i-restart"/></svg>重启</button>
+            <button class="btn btn-red" id="btn-stop" data-need="operator"><svg class="ico" aria-hidden="true"><use href="#i-stop"/></svg>停止</button>
+            <button class="btn btn-danger-outline" id="btn-kill" data-need="operator" title="强制终止进程,存档可能损坏" aria-label="强杀:强制终止进程,存档可能损坏"><svg class="ico" aria-hidden="true"><use href="#i-kill"/></svg>强杀</button>
           </div>
           <button class="btn btn-ghost btn-icon-only" id="btn-appearance" title="外观设置" aria-label="外观设置"><svg class="ico" aria-hidden="true"><use href="#i-theme"/></svg></button>
         </div>
@@ -258,8 +258,8 @@
           <div id="console" class="console"></div>
           <div class="console-input glass-inner">
             <span class="prompt">/</span>
-            <input id="cmd-input" type="text" placeholder="输入命令,例如 say Hello 或 time set day…" autocomplete="off" />
-            <button class="btn btn-blue" id="cmd-send">发送</button>
+            <input id="cmd-input" data-need="operator" type="text" placeholder="输入命令,例如 say Hello 或 time set day…" autocomplete="off" />
+            <button class="btn btn-blue" id="cmd-send" data-need="operator">发送</button>
           </div>
           <div class="quick-cmds">
             <button class="chip" data-cmd="list">list</button>
@@ -283,7 +283,7 @@
             <div class="card glass">
               <div class="card-title row-between">
                 <span>在线时长 <span class="dim small">按进出服记录累计</span></span>
-                <button class="icon-btn danger" id="pt-reset">重置</button>
+                <button class="icon-btn danger" id="pt-reset" data-need="manager">重置</button>
               </div>
               <div id="playtime-list"></div>
             </div>
@@ -402,7 +402,7 @@
             </select>
             <input id="task-minutes" type="number" min="1" value="60" title="分钟" />
             <input id="task-time" type="time" value="04:00" hidden />
-            <button class="btn btn-blue" id="task-create">创建</button>
+            <button class="btn btn-blue" id="task-create" data-need="manager">创建</button>
           </div>
         </div>
         <div class="card glass" style="margin-top:18px">
@@ -558,8 +558,8 @@
       <section class="view" id="view-settings">
         <div class="card glass" style="margin-bottom:18px">
           <div class="card-title row-between">
-            <span>实例配置</span>
-            <button class="btn btn-blue" id="inst-cfg-save">保存</button>
+            <span>实例配置 <span class="dim small" id="cfg-created"></span></span>
+            <button class="btn btn-blue" id="inst-cfg-save" data-need="manager">保存</button>
           </div>
           <div class="props-grid">
             <div class="prop-row"><label>实例名称</label><input id="cfg-name" type="text" maxlength="40" /></div>
@@ -914,9 +914,9 @@
 
         <div class="card glass" style="margin-top:18px">
           <div class="card-title row-between">
-            <span>操作审计 <span class="dim small">所有写操作,含失败尝试</span></span>
+            <span>操作审计 <span class="dim small">所有写操作,含失败尝试</span> <span id="au-user-chip"></span></span>
             <span>
-              <input id="au-q" type="search" placeholder="筛选用户 / 动作 / 路径" style="width:200px" />
+              <input id="au-q" type="search" placeholder="全文搜索:动作 / 路径 / 参数" style="width:200px" />
               <button class="icon-btn" id="au-refresh">刷新</button>
             </span>
           </div>

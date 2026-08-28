@@ -252,6 +252,23 @@ async function collabRoleSuite(iid) {
   check('collab operator: 可启停(路由是 /server/:action,别再写成 /start)',
     (await as(users.operator, 'POST', '/server/stop')) !== 403);
 
+  /* perm 要下发给前端,否则界面没法按档位禁用按钮 —— viewer 会看到完整界面、
+     点了才 403。后端一直算着 req.perm,只是从没发出去过。 */
+  for (const [who, want] of [[users.viewer, 'viewer'], [users.operator, 'operator'], [users.manager, 'manager']]) {
+    cookie = '';
+    await req('POST', '/api/auth/login', { username: who, password: pass });
+    const st = await req('GET', `/api/instances/${iid}/status`);
+    check(`perm: /status 下发 ${want}`, st.json && st.json.perm === want, JSON.stringify(st.json && st.json.perm));
+    const ls = await req('GET', '/api/instances');
+    const mine = (ls.json || []).find((x) => x.id === iid);
+    check(`perm: 实例列表下发 ${want}`, mine && mine.perm === want, JSON.stringify(mine && mine.perm));
+  }
+  cookie = adminCookie;
+  {
+    const st = await req('GET', `/api/instances/${iid}/status`);
+    check('perm: 管理员是 owner 档', st.json && st.json.perm === 'owner', JSON.stringify(st.json && st.json.perm));
+  }
+
   // viewer 不该读到凭据:这几条 GET 会吐出 rcon 密码 / 整个 server.properties / 任意文件
   check('collab viewer: 禁止读 rcon 密码', (await as(users.viewer, 'GET', '/rcon')) === 403);
   check('collab viewer: 禁止读 server.properties', (await as(users.viewer, 'GET', '/properties')) === 403);
@@ -983,7 +1000,21 @@ async function uniqueNameRoundtrip() {
   if (inst) await incrementalBackupSuite(inst.id);
   if (inst) await chunkedUploadSuite(inst.id);
   if (inst) await rconTunnelSuite(inst.id);
-  if (inst && isAdmin) await collabRoleSuite(inst.id);
+  /* 协作者权限档:原先只在"面板上恰好已有实例"时才跑,空面板(CI 就是空的)会整段跳过 ——
+     也就是说这套权限用例在 CI 里从来没执行过,而它覆盖的正是最容易写错的部分。
+     没有现成实例就自己造一个 import 空壳走完 finalize,跑完删掉。 */
+  if (isAdmin) {
+    let cid = inst && inst.id;
+    let owned = false;
+    if (!cid) {
+      const c = await req('POST', '/api/instances/import', { name: 'smoke-collab', xmx: 512 });
+      cid = c.json && c.json.instance && c.json.instance.id;
+      if (cid) { await finalizeImportShell(cid); owned = true; }
+      check('collab: 自建测试实例(空面板也能跑权限用例)', !!cid, JSON.stringify(c.json));
+    }
+    if (cid) await collabRoleSuite(cid);
+    if (owned && cid) await req('DELETE', `/api/instances/${cid}`);
+  }
 
   /* ── 多租户与新功能的集成用例(功能 15)──
      这一段专门覆盖"跨用户"和"权限边界",单用户的 happy path 测不到这些。
