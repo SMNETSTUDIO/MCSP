@@ -404,8 +404,14 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
     const mb = parseInt(body.xmx, 10);
     if (!Number.isFinite(mb)) return res.status(400).json({ ok: false, error: 'xmx 无效' });
     if (mb < 512 || mb > 65536) return res.status(400).json({ ok: false, error: '内存上限需在 512 ~ 65536 MB 之间' });
-    const qerr = quotaError(req, mb, false, inst);
-    if (qerr) return res.status(403).json({ ok: false, error: qerr });
+    /* 只在**往上加**的时候查配额,持平和缩小一律放行。
+       前端保存实例设置时总会带上 xmx(哪怕用户只改了个名字),所以一旦管理员调低了
+       某人的配额,已经超额的用户会连改实例名都 403 —— 而"把内存调小自救"这条
+       唯一的出路,恰好也被同一条拦住。缩小是让账变好看的方向,没有理由挡它。 */
+    if (mb > inst.xmx) {
+      const qerr = quotaError(req, mb, false, inst);
+      if (qerr) return res.status(403).json({ ok: false, error: qerr });
+    }
     if (mb !== inst.xmx) {
       inst.xmx = mb;
       inst.metrics.ramMax = mb;
