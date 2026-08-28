@@ -36,6 +36,12 @@ const settings = {
     crashWindowMin: 10,     // 崩溃计数窗口(分钟)
     crashMaxRestarts: 3,    // 窗口内最多自动拉起几次,0 = 关闭崩溃自动重启
     crashRestartDelaySec: 5, // 崩溃后隔多久再拉
+    /* 内存配额的堆外余量(见 utils.memOverheadMB)。`-Xmx` 只管堆,而配额要防的是
+       宿主机内存被排满 —— 两者差着 Metaspace / CodeCache / 线程栈 / Netty direct buffer。
+       模组服堆外吃得比原版多,所以这同样该是每个部署自己的事。
+       **两项同时设 0 = 配额退回纯 Σ-Xmx**,也就是本功能上线前的行为。 */
+    memOverheadPct: 13,     // 余量占 -Xmx 的百分比
+    memOverheadMinMB: 512,  // 余量下限:小堆按比例算不够,拿这个兜底
   },
   /* 异地备份目标(见 remotebackup.js)。默认关闭 —— 没配的人不该因为
      升级就开始往某个地方传东西 */
@@ -66,6 +72,7 @@ const settings = {
 // 老配置文件里没有 thresholds / notify 或缺字段时补齐,免得各处到处判空
 settings.thresholds = {
   diskWarnPct: 90, crashWindowMin: 10, crashMaxRestarts: 3, crashRestartDelaySec: 5,
+  memOverheadPct: 13, memOverheadMinMB: 512,
   ...(settings.thresholds || {}),
 };
 
@@ -142,10 +149,12 @@ router.put('/', requireAdmin, (req, res) => {
     settings.require2FA = want;
   }
   if (b.thresholds && typeof b.thresholds === 'object') {
-    // 每项都有下限:磁盘告警线设成 5% 会天天响,窗口设成 0 分钟等于永不计数
+    // 每项都有下限:磁盘告警线设成 5% 会天天响,窗口设成 0 分钟等于永不计数。
+    // 两个 memOverhead 下限是 0 —— 那是有意留的逃生阀(退回纯 Σ-Xmx),不是笔误
     const lim = {
       diskWarnPct: [50, 99], crashWindowMin: [1, 1440],
       crashMaxRestarts: [0, 100], crashRestartDelaySec: [1, 3600],
+      memOverheadPct: [0, 100], memOverheadMinMB: [0, 4096],
     };
     for (const [k, [lo, hi]] of Object.entries(lim)) {
       if (!(k in b.thresholds)) continue;

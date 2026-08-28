@@ -344,6 +344,34 @@ function check(name, cond, detail = '') {
 }
 
 /**
+ * 把一个 import 空壳走完 finalize,让它变成 stopped —— 否则删不掉。
+ *
+ * `DELETE /:iid` 要求 `state === 'stopped'`,而空壳是 `importing`,唯一的出路就是
+ * finalize。用例里凡是建了空壳的,收尾都得先过这一道,不然实例留在注册表里,
+ * 后面「删测试用户」会因为"该用户还有实例"失败,看起来像是权限用例挂了。
+ */
+async function finalizeImportShell(iid) {
+  const fsp = require('fs/promises');
+  const path = require('path');
+  const os = require('os');
+  const { createArchive } = require('../src/archive');
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'mcsp-shell-'));
+  try {
+    const src = path.join(root, 'srv');
+    await fsp.mkdir(src, { recursive: true });
+    await fsp.writeFile(path.join(src, 'server.properties'), 'server-port=25598\nlevel-name=world\n');
+    await fsp.writeFile(path.join(src, 'server.jar'), Buffer.alloc(1024, 7));
+    const zip = path.join(root, 'srv.zip');
+    await createArchive(zip, src, await fsp.readdir(src), 'zip');
+    await reqRaw('POST', `/api/instances/${iid}/files/upload?path=%2F&name=srv.zip&overwrite=1`,
+      await fsp.readFile(zip));
+    await req('POST', `/api/instances/${iid}/import/finalize`, { archive: '/srv.zip', eula: true });
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
  * 多租户 / 权限边界用例(功能 15)。
  *
  * 原来的冒烟测试全程用一个 admin 会话,所以"普通用户看不见别人的东西"、
@@ -421,6 +449,58 @@ async function multiTenantSuite() {
     check('tenant: 超内存配额被拒', !(r.json && r.json.ok) || r.status >= 400,
       JSON.stringify(r.json));
     if (r.json && r.json.ok && r.json.id) await req('DELETE', `/api/instances/${r.json.id}`);
+
+    /* 内存配额按「堆 + 堆外」计。配额 1024 MB,默认余量 max(512 MB, 13%):
+       1024 的实例实占 1536 装不下,512 的实例实占 1024 正好占满。
+       这两条一起把边界钉死 —— 只测"被拒"的话,余量算成多大都能过。 */
+    r = await req('POST', '/api/instances/import', { name: 'smoke-mem-1024', xmx: 1024 });
+    check('quota: 1024 实例被堆外余量拦下(配额 1024)',
+      r.status >= 400 && !(r.json && r.json.ok), `${r.status} ${JSON.stringify(r.json)}`);
+    check('quota: 拒绝文案点明堆外(否则用户会以为面板算错了)',
+      !!(r.json && /堆外/.test(r.json.error || '')), r.json && r.json.error);
+    if (r.json && r.json.ok && r.json.instance) await req('DELETE', `/api/instances/${r.json.instance.id}`);
+
+    r = await req('POST', '/api/instances/import', { name: 'smoke-mem-512', xmx: 512 });
+    const memIid = r.json && r.json.instance && r.json.instance.id;
+    check('quota: 512 实例恰好占满配额(512 堆 + 512 堆外 = 1024)',
+      r.status === 200 && !!memIid, `${r.status} ${JSON.stringify(r.json)}`);
+
+    if (memIid) {
+      /* 存量超额的锁死回归。制造局面:先放宽配额把实例撑到 2048,再把配额收回 1024。
+         此时实例实占 2560 > 配额 1024,和"管理员调低了配额"或"升级后口径变严"
+         是同一种状态。前端保存实例设置时**总会**带上 xmx,所以挡住持平
+         = 用户连改个实例名都做不了,而"把内存调小自救"恰好被同一条拦住。 */
+      const tenantCookie = cookie;
+      const setQuota = async (memMB) => {
+        cookie = adminCookie;
+        await req('PUT', `/api/users/${uname}/limits`,
+          { maxInstances: 1, maxMemMB: memMB, maxCpuCores: 1, maxDiskMB: 1024 });
+        cookie = tenantCookie;
+      };
+
+      await setQuota(4096);
+      r = await req('PATCH', `/api/instances/${memIid}`, { xmx: 2048 });
+      check('quota: 配额够时可以加内存', r.status === 200, `${r.status} ${JSON.stringify(r.json)}`);
+
+      await setQuota(1024);   // ← 实例 2048(实占 2560)现在远超配额
+      r = await req('PATCH', `/api/instances/${memIid}`, { xmx: 2048, name: 'smoke-mem-renamed' });
+      check('quota: 超额时持平的 PATCH 放行(否则连改名都做不了)',
+        r.status === 200, `${r.status} ${JSON.stringify(r.json)}`);
+
+      r = await req('PATCH', `/api/instances/${memIid}`, { xmx: 1024 });
+      check('quota: 超额时缩小放行(这是唯一的自救出路)',
+        r.status === 200 && r.json && r.json.instance && r.json.instance.xmx === 1024,
+        `${r.status} ${JSON.stringify(r.json)}`);
+
+      r = await req('PATCH', `/api/instances/${memIid}`, { xmx: 4096 });
+      check('quota: 超额时继续加内存仍被拒', r.status === 403, `${r.status} ${JSON.stringify(r.json)}`);
+
+      // 空壳是 importing,直接 DELETE 会被 state 守卫挡掉 —— 先 finalize 再删
+      await finalizeImportShell(memIid);
+      r = await req('DELETE', `/api/instances/${memIid}`);
+      check('quota: 清理测试实例', r.status === 200 && r.json && r.json.ok,
+        `${r.status} ${JSON.stringify(r.json)}`);
+    }
 
     // 看不见别人的实例
     r = await req('GET', '/api/instances');

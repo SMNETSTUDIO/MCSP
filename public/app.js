@@ -289,8 +289,19 @@ function applyDashboardStats(inst) {
   $('#stat-players').innerHTML = `${inst.playersOnline} <span class="dim small">/ ${inst.maxPlayers}</span>`;
   $('#stat-cpu').innerHTML = `${inst.metrics.cpu}<span class="dim small">%</span>`;
   $('#bar-cpu').style.width = Math.min(100, inst.metrics.cpu) + '%';
-  $('#stat-ram').innerHTML = `${inst.metrics.ram} <span class="dim small">/ ${inst.metrics.ramMax} MB</span>`;
-  $('#bar-ram').style.width = Math.min(100, (inst.metrics.ram / inst.metrics.ramMax) * 100) + '%';
+  /* RSS 超过 -Xmx 是**常态**,不是异常:-Xmx 只管堆,RSS 还含 Metaspace、Code Cache、
+     线程栈、GC 自身结构和 Netty 的 direct buffer。原先这里 Math.min(100, …) 一夹,条子
+     就永久钉在 100% —— "健康的堆外开销"和"真的要 OOM 了"长得一模一样,等于把唯一的
+     证据藏起来了。照样满条,但换色并把超出量写出来,让人看得见超了多少。 */
+  const overMB = inst.metrics.ram - inst.metrics.ramMax;
+  const ramPct = inst.metrics.ramMax ? (inst.metrics.ram / inst.metrics.ramMax) * 100 : 0;
+  $('#stat-ram').innerHTML = `${inst.metrics.ram} <span class="dim small">/ ${inst.metrics.ramMax} MB 堆`
+    + (overMB > 0 ? ` · 堆外 +${overMB}` : '') + '</span>';
+  $('#bar-ram').style.width = Math.min(100, ramPct) + '%';
+  $('#bar-ram').classList.toggle('over', overMB > 0);
+  $('#bar-ram').title = overMB > 0
+    ? `RSS ${inst.metrics.ram} MB = 堆上限 ${inst.metrics.ramMax} MB + 堆外 ${overMB} MB(Metaspace / Code Cache / 线程栈 / Netty direct buffer)`
+    : `RSS ${inst.metrics.ram} MB / 堆上限 ${inst.metrics.ramMax} MB`;
   renderTps(inst);
 }
 
@@ -377,11 +388,20 @@ async function loadOverview() {
 
 function renderHostCard(host) {
   $('#host-name').textContent = `${host.hostname} · ${host.platform}`;
-  const memPct = Math.round(((host.totalMem - host.freeMem) / host.totalMem) * 100);
+  /* 用 availMem(后端显式读 MemAvailable)而不是 freeMem。os.freemem() 的口径随 libuv
+     版本变过 —— 老版本是 MemFree,会把可回收的 page cache 算作已用,而 MC 刷世界文件
+     时 page cache 很大,这张卡会常年虚高。老面板的响应里没有 availMem,退回 freeMem。 */
+  const avail = host.availMem !== undefined ? host.availMem : host.freeMem;
+  const memPct = Math.round(((host.totalMem - avail) / host.totalMem) * 100);
+  /* 已承诺 = Σ(堆 + 堆外余量),也就是配额拦人用的那个数。跟真实用量并排放,是因为
+     两者不是一回事:配额还有余、机器已经满了,这种局面得在这里看得出来 */
+  const commit = host.committedMem || 0;
+  const commitPct = Math.round((commit / host.totalMem) * 100);
   $('#host-grid').innerHTML = [
     ['CPU', `${escapeHtml(host.cpuModel.split(' ').slice(0, 3).join(' '))} <span class="dim small">× ${host.cores}</span>`],
     ['负载', `${host.loadavg.join(' / ')}`],
-    ['内存', `${memPct}% <span class="dim small">${Math.round((host.totalMem - host.freeMem) / 1024)} / ${Math.round(host.totalMem / 1024)} GB</span>`],
+    ['内存', `${memPct}% <span class="dim small">${Math.round((host.totalMem - avail) / 1024)} / ${Math.round(host.totalMem / 1024)} GB 实际用量</span>`],
+    ['已承诺', `<span class="${commitPct >= 100 ? 'disk-warn' : ''}">${commitPct}%</span> <span class="dim small">${(commit / 1024).toFixed(1)} GB · 全部实例 -Xmx + 堆外余量</span>`],
     ['磁盘', host.disk
       ? `<span class="${host.disk.usedPct >= 90 ? 'disk-warn' : ''}">${host.disk.usedPct}%</span> <span class="dim small">${(host.disk.usedMB / 1024).toFixed(1)} / ${(host.disk.totalMB / 1024).toFixed(1)} GB</span>`
       : '<span class="dim small">不可用</span>'],
@@ -2719,7 +2739,7 @@ async function loadUsers() {
           ${u.defaultPassword ? '<span class="task-badge off" style="color:#ffe479;border-color:rgba(255,214,10,0.4)">默认密码未修改</span>' : ''}
         </div>
         <div class="backup-meta">${u.limits
-          ? `实例 ${u.usage.instances}/${u.limits.maxInstances} · 内存 ${u.usage.memMB}/${u.limits.maxMemMB} MB · CPU ${u.limits.maxCpuCores} 核 · 磁盘 ${u.usage.diskMB}/${u.limits.maxDiskMB || '∞'} MB · `
+          ? `实例 ${u.usage.instances}/${u.limits.maxInstances} · 内存 <span title="${u.usage.memMB} MB 堆(-Xmx 之和)+ ${(u.usage.memReservedMB || u.usage.memMB) - u.usage.memMB} MB 堆外余量。配额按含堆外的实际预留计">${u.usage.memReservedMB || u.usage.memMB}/${u.limits.maxMemMB} MB</span> · CPU ${u.limits.maxCpuCores} 核 · 磁盘 ${u.usage.diskMB}/${u.limits.maxDiskMB || '∞'} MB · `
           : `实例 ${u.usage.instances} · 不受配额限制 · `}创建于 ${fmtAgo(u.createdAt)}</div>
       </div>
       <div class="spacer"></div>
@@ -2904,6 +2924,8 @@ async function loadSystem() {
   $('#sys-crash-win').value = t.crashWindowMin ?? 10;
   $('#sys-crash-max').value = t.crashMaxRestarts ?? 3;
   $('#sys-crash-delay').value = t.crashRestartDelaySec ?? 5;
+  $('#sys-mem-pct').value = t.memOverheadPct ?? 13;
+  $('#sys-mem-min').value = t.memOverheadMinMB ?? 512;
   renderRemoteBackup(s.backupRemote);
   renderNotify(s.notify);
   loadAudit();
@@ -3007,6 +3029,8 @@ $('#sys-save').addEventListener('click', async () => {
         crashWindowMin: parseInt($('#sys-crash-win').value, 10),
         crashMaxRestarts: parseInt($('#sys-crash-max').value, 10),
         crashRestartDelaySec: parseInt($('#sys-crash-delay').value, 10),
+        memOverheadPct: parseInt($('#sys-mem-pct').value, 10),
+        memOverheadMinMB: parseInt($('#sys-mem-min').value, 10),
       },
     },
   });
