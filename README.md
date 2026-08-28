@@ -240,7 +240,10 @@ CI 在每次 push 时启动面板并跑完整冒烟;Docker 镜像由 Actions 构
 - 安装服务端时写入 `eula=true`,代表**你**同意 [Minecraft EULA](https://aka.ms/MinecraftEULA)(创建实例时需勾选确认)。
   <sub>Installing a server writes `eula=true`, meaning **you** accept the Minecraft EULA (confirmed at instance creation).</sub>
 - 面板**未内置 HTTPS/反代**,公网部署请置于 Nginx/Caddy 之后并修改默认密码。
-  <sub>No built-in HTTPS/reverse proxy — put it behind Nginx/Caddy and change the default password before going public.</sub>
+  写操作带跨站(CSRF)校验,**反代请透传 `Host` 头**;用多个域名访问同一面板时把它们加进
+  `MCSP_TRUSTED_ORIGINS`(逗号分隔、含协议),否则写操作会被拒并提示「跨站请求被拒绝」。
+  <sub>No built-in HTTPS/reverse proxy — put it behind Nginx/Caddy and change the default password before going public.
+  Writes are CSRF-checked: forward the `Host` header, and list any additional hostnames in `MCSP_TRUSTED_ORIGINS`.</sub>
 - 内网穿透与外置登录组件(bore/frpc/ngrok/playit、authlib-injector)均从官方源下载,遵守各自服务条款。
   <sub>Tunnel & auth components are downloaded from official sources; comply with their respective terms.</sub>
 

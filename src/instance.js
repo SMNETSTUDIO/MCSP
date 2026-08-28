@@ -266,6 +266,7 @@ class Instance {
       type: this.type,
       owner: this.owner,
       collaborators: this.collaboratorList(),   // 统一成 [{name,role}],前端不用再判两种形态
+      createdAt: this.createdAt,                // 一直在存也一直在落盘,只是从没往外发过
       state: this.state,
       installProgress: this.installProgress,
       version: this.version,

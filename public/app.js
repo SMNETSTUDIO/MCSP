@@ -58,6 +58,48 @@ let fmOpenFile = null;
 let fmClip = null;               // { op:'cut'|'copy', iid, dir, names[] }
 let fmLastIndex = null;          // Shift 范围选的锚点,每次换目录重置
 
+/* ───────── 权限档在 UI 上的体现 ─────────
+ *
+ * 后端一直算着 req.perm(viewer/operator/manager/owner),但从没发给前端 ——
+ * 于是 viewer 看到的界面和主人一模一样:启动、保存配置、删文件按钮全在,
+ * 点下去才 403。「能看见但一按就报错」比「看不见」更糟:用户不知道是自己没权限
+ * 还是面板坏了,而报错文案是通用的 403。
+ *
+ * 做法是声明式的:HTML 上标 data-need="operator|manager|owner",
+ * 这里统一按当前实例的档位禁用 + 给出原因。以后加按钮只需加一个属性,
+ * 不用再往这里塞 if。
+ */
+const PERM_LEVEL = { viewer: 1, operator: 2, manager: 3, owner: 4 };
+const PERM_LABEL = { viewer: '只读', operator: '运维', manager: '管理', owner: '主人' };
+const permMap = new Map();          // iid → perm。单独存,免得被 SSE 的 state 事件覆盖掉
+
+function permOf(iid) { return permMap.get(iid) || null; }
+
+/** 当前实例下,调用者是否够 need 这一档 */
+function canDo(need) {
+  const p = permOf(currentIid);
+  if (!p) return true;              // 拿不到就不拦(老后端/还没加载完),后端才是权威
+  return (PERM_LEVEL[p] || 0) >= (PERM_LEVEL[need] || 4);
+}
+
+/** 按当前实例的档位刷新所有标了 data-need 的控件 */
+function applyPermUI() {
+  const p = permOf(currentIid);
+  for (const el of document.querySelectorAll('[data-need]')) {
+    const need = el.dataset.need;
+    const ok = canDo(need);
+    el.disabled = !ok;
+    el.classList.toggle('perm-denied', !ok);
+    if (!ok) {
+      el.title = `需要「${PERM_LABEL[need] || need}」及以上权限,你在这个实例上是「${PERM_LABEL[p] || p}」`;
+    } else if (el.dataset.permTitle !== undefined) {
+      el.title = el.dataset.permTitle;
+    }
+  }
+  // 协作者卡片不在这里管:renderCollab() 已经按 admin||owner 显隐了,
+  // 再写一遍就是同一件事的第二个真相来源,迟早会两边不一致
+}
+
 /* ───────── helpers ───────── */
 
 async function api(path, opts = {}) {
@@ -73,6 +115,15 @@ async function api(path, opts = {}) {
   if (res.status === 403 && data && data.code === '2fa_required') {
     force2FA(data.error);
     throw new Error('2fa_required');
+  }
+  /* 跨站校验拦下来的请求。正常同源访问永远走不到这里 —— 走到了基本只有一种情况:
+     面板在反代后面,而反代没把 Host 头透传对(或者用了另一个域名访问)。
+     不显式处理的话表现是"点了没反应":很多调用点不判 ok,拿到 {ok:false} 就静默结束,
+     而这恰恰是最需要把原因说清楚的时候。 */
+  if (res.status === 403 && data && data.code === 'csrf') {
+    toast('跨站请求被拒绝。若面板在 Nginx/Caddy 后面,请确认反代透传了 Host 头;'
+      + '用其它域名访问时把该域名加进 MCSP_TRUSTED_ORIGINS 环境变量。', true);
+    throw new Error('csrf');
   }
   return data;
 }
@@ -242,6 +293,7 @@ $('#inst-select').addEventListener('change', async (e) => {
 });
 
 async function refreshInstanceContext() {
+  applyPermUI();                       // 切实例先按新档位刷一遍,别让上一个实例的状态留在按钮上
   metricsHistory = await iapi('/metrics/history');
   metricsDay = [];
   chartRange = 'live';
@@ -377,6 +429,9 @@ function javaCellHtml(host) {
 async function loadOverview() {
   const [host, list] = await Promise.all([api('/host'), api('/instances')]);
   instMap = new Map(list.map((i) => [i.id, i]));
+  // perm 只在列表和 /status 里下发(SSE 广播不带,那份要发给权限不同的多个人)
+  for (const i of list) if (i.perm) permMap.set(i.id, i.perm);
+  applyPermUI();
   renderInstSelect();
 
   // 宿主机一栏只有管理员能看:普通用户拿到的 /host 压根没有这些字段
@@ -461,10 +516,16 @@ function renderInstGrid() {
         <div class="inst-foot">
           <span class="pill ${pillCls}">${i.state === 'installing' ? `安装中 ${i.installProgress || 0}%` : txt}</span>
           <div class="spacer"></div>
-          ${i.state === 'stopped'
-            ? `<button class="btn btn-green small-btn" data-power="start" data-iid="${i.id}">${ico('play')}启动</button>`
-            : (i.state === 'installing' || i.state === 'importing') ? ''
-            : `<button class="btn btn-red small-btn" data-power="stop" data-iid="${i.id}">${ico('stop')}停止</button>`}
+          ${(() => {
+            /* 总览卡片上的启停是**按卡片所属实例**判权限的,不能用 canDo()
+               (那个看的是当前选中实例)。只读档直接不渲染按钮 —— 列表里摆一排
+               点了就报错的按钮,比没有按钮更让人困惑 */
+            const p = permMap.get(i.id);
+            if (p && (PERM_LEVEL[p] || 0) < PERM_LEVEL.operator) return '';
+            if (i.state === 'stopped') return `<button class="btn btn-green small-btn" data-power="start" data-iid="${i.id}">${ico('play')}启动</button>`;
+            if (i.state === 'installing' || i.state === 'importing') return '';
+            return `<button class="btn btn-red small-btn" data-power="stop" data-iid="${i.id}">${ico('stop')}停止</button>`;
+          })()}
           <button class="btn btn-ghost small-btn" data-open="${i.id}">管理</button>
         </div>
       </div>`;
@@ -675,10 +736,20 @@ $('#imp-ok').addEventListener('click', async () => {
 
     setStep('完成', 100);
     const d = fin.detected || {};
-    toast(d.type
-      ? `已导入:${typeLabel(d.type)} ${d.version || '(版本未知)'}`
-      : '已导入,但未能识别服务端类型,请到设置页确认');
-    if (d.notes && d.notes.length) toast(d.notes[0], true);
+    /* 把探测置信度说出来。detect.js 算了 high/low/none 三级(三条线索都对上才是 high),
+       但之前只用了 d.type —— 于是"三样都对上"和"只猜出个类型、版本和 jar 都没认出来"
+       给用户的反馈一模一样。而后者恰恰需要他去设置页核对一遍。
+       notes 也从只显示第一条改成全部显示:里面有"未找到已同意的 eula.txt"这类
+       直接影响能不能启动的提示,漏掉后面几条等于让用户自己去撞。 */
+    if (!d.type) {
+      toast('已导入,但**未能识别**服务端类型,请到设置页手动指定', true);
+    } else if (d.confidence === 'high') {
+      toast(`已导入:${typeLabel(d.type)} ${d.version}`);
+    } else {
+      toast(`已导入:${typeLabel(d.type)} ${d.version || '(版本未知)'} —— 识别置信度低,`
+        + '请到设置页核对类型与版本再启动', true);
+    }
+    for (const note of (d.notes || [])) toast(note, true);
 
     $('#imp-modal').hidden = true;
     $('#imp-name').value = ''; $('#imp-file').value = ''; $('#imp-eula').checked = false;
@@ -2059,6 +2130,25 @@ $('#task-sched-type').addEventListener('change', (e) => {
   $('#task-time').hidden = e.target.value !== 'daily';
 });
 
+/**
+ * 最近几次执行的结果条。后端一直存着最近 5 次(tasks.js 的 task.history)并原样下发,
+ * 前端却只画了 lastResult —— 而「偶尔抽风」和「一直坏」是两种完全不同的处置,
+ * 一次结果分不出来,五次一眼就看出来。
+ * 最新的在右边,鼠标悬停看具体时间和原因。
+ */
+function taskHistoryHtml(t) {
+  const h = (t.history || []).slice(-5);
+  if (h.length < 2) return '';        // 只有一次的话 lastResult 已经说完了,不重复占地方
+  const dots = h.map((r) => {
+    const when = r.at ? fmtAgo(r.at) : '';
+    const tip = `${r.ok ? '成功' : '失败'}${when ? ' · ' + when : ''}${r.ms ? ` · 耗时 ${r.ms}ms` : ''}${r.msg ? '\n' + r.msg : ''}`;
+    return `<i class="run-dot ${r.ok ? 'ok' : 'bad'}" title="${escapeHtml(tip)}"></i>`;
+  }).join('');
+  const bad = h.filter((r) => !r.ok).length;
+  return `<div class="backup-meta run-history">最近 ${h.length} 次 ${dots}`
+    + `<span class="dim small"> ${bad ? `${bad} 次失败` : '全部成功'}</span></div>`;
+}
+
 async function loadTasks() {
   const list = await iapi('/tasks');
   $('#task-list').innerHTML = list.length ? list.map((t) => `
@@ -2071,6 +2161,7 @@ async function loadTasks() {
           ${t.lastResult.ok ? '✔' : '✘'} ${escapeHtml(t.lastResult.msg || '')}
           ${t.failStreak > 1 ? `<b>· 已连续 ${t.failStreak} 次未成功</b>` : ''}
         </div>` : ''}
+        ${taskHistoryHtml(t)}
       </div>
       <div class="spacer"></div>
       <button class="icon-btn" data-tact="run" data-id="${t.id}">立即执行</button>
@@ -2403,7 +2494,7 @@ async function loadPlaytime() {
       <div class="d-name">${p.online ? '<span style="color:var(--green)">●</span> ' : ''}${escapeHtml(p.name)}</div>
       <div class="d-bar"><i style="width:${Math.max(2, Math.round((p.totalMs / max) * 100))}%"></i></div>
       <div class="d-size">${fmtDuration(p.totalMs)}</div>
-      <div class="d-detail dim small">${p.sessions} 次 · 最后 ${p.lastSeen ? fmtAgo(p.lastSeen) : '—'}</div>
+      <div class="d-detail dim small">${p.sessions} 次 · ${p.firstSeen ? `初见 ${fmtAgo(p.firstSeen)} · ` : ''}最后 ${p.lastSeen ? fmtAgo(p.lastSeen) : '—'}</div>
     </div>`).join('');
 }
 
@@ -2541,8 +2632,13 @@ const BOOL_PROPS = new Set(['pvp', 'online-mode', 'white-list', 'allow-nether', 
 async function loadProperties() {
   const [props, status] = await Promise.all([iapi('/properties'), iapi('/status')]);
   instMap.set(status.id, status);
+  if (status.perm) { permMap.set(status.id, status.perm); applyPermUI(); }
   $('#cfg-name').value = status.name || '';
   $('#cfg-icon').value = status.icon || '🌳';
+  // createdAt 一直在存也一直在落盘,只是从没进过 snapshot。用户/邀请/备份都有"创建于",
+  // 唯独实例没有 —— 而"这个服开了多久了"恰恰是最常被问起的
+  $('#cfg-created').textContent = status.createdAt
+    ? `创建于 ${new Date(status.createdAt).toLocaleString('zh-CN')} · ${fmtAgo(status.createdAt)}` : '';
   $('#cfg-xmx').value = status.xmx || 2048;
   $('#cfg-jvm').value = status.jvmArgs || '';
   loadReinstall(status);
@@ -2881,17 +2977,26 @@ $('#nt-test').addEventListener('click', async () => {
     || '没有配置任何推送目标';
 });
 
+/* 精确到人的筛选。后端 read() 早就支持 user 参数,而且为它写了一条免 JSON.parse 的
+   快路径(直接在原始行里找 "user":"xxx"),但前端从来只发 q —— 那条优化没有调用方
+   能触发。点用户名即筛他一个人:排查"这是谁干的"时,全文搜索会把路径里含同名
+   子串的行也带进来,而精确匹配不会。 */
+let auditUser = '';
+
 async function loadAudit() {
   const q = $('#au-q').value.trim();
-  const d = await api(`/audit?limit=100${q ? '&q=' + encodeURIComponent(q) : ''}`);
+  const d = await api(`/audit?limit=100${q ? '&q=' + encodeURIComponent(q) : ''}`
+    + (auditUser ? '&user=' + encodeURIComponent(auditUser) : ''));
   const rows = (d && d.rows) || [];
+  $('#au-user-chip').innerHTML = auditUser
+    ? `<span class="task-badge" id="au-user-clear" style="cursor:pointer" title="点击取消筛选">仅看 ${escapeHtml(auditUser)} ✕</span>` : '';
   $('#audit-list').innerHTML = rows.length ? rows.map((r) => {
     const bad = r.status >= 400;
     const params = r.params && Object.keys(r.params).length
       ? escapeHtml(JSON.stringify(r.params)).slice(0, 160) : '';
     return `<div class="audit-row ${bad ? 'bad' : ''}">
       <div class="au-time dim small">${new Date(r.at).toLocaleString('zh-CN')}</div>
-      <div class="au-user">${escapeHtml(r.user)}</div>
+      <div class="au-user"><a href="#" data-au-user="${escapeHtml(r.user)}" title="只看这个用户的操作">${escapeHtml(r.user)}</a></div>
       <div class="au-action">${escapeHtml(r.action)}</div>
       <div class="au-status ${bad ? 'bad' : 'ok'}">${r.status}</div>
       <div class="au-detail dim small" title="${escapeHtml(r.path)}">${escapeHtml(r.path)}${params ? ' · ' + params : ''}</div>
@@ -2905,6 +3010,19 @@ async function loadAudit() {
   }
 }
 $('#au-refresh').addEventListener('click', loadAudit);
+// 点用户名 → 只看他;点顶部的筛选条 → 取消
+$('#audit-list').addEventListener('click', (e) => {
+  const a = e.target.closest('[data-au-user]');
+  if (!a) return;
+  e.preventDefault();
+  auditUser = a.dataset.auUser === '-' ? '' : a.dataset.auUser;
+  loadAudit();
+});
+$('#au-user-chip').addEventListener('click', (e) => {
+  if (!e.target.closest('#au-user-clear')) return;
+  auditUser = '';
+  loadAudit();
+});
 $('#au-q').addEventListener('input', (() => {
   let t = null;
   return () => { clearTimeout(t); t = setTimeout(loadAudit, 300); };
