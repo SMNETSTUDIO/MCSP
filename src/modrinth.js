@@ -96,15 +96,24 @@ async function versions({ projectId, type, version }) {
  * 下载指定版本到 destDir。返回 { filename, size }。
  * 先写临时文件、校验 sha1 通过后再 rename —— 校验失败绝不能留下一个
  * 半截或被篡改的 jar 在 plugins/ 里等着被加载。
+ *
+ * `checkQuota(bytes)` 由调用方传入,返回错误文案表示放不下。Modrinth 的版本信息里
+ * 本来就带文件体积,拿真实数字去过配额比在路由里拍一个固定值靠谱得多 ——
+ * 整合包和大型模组远不止几 MB,而下面的下载是**无界**流式写入,
+ * 预检一旦放行就写多少算多少。同时也用它做下载的硬上限。
  */
-async function install({ projectId, versionId, type, version, destDir }) {
+async function install({ projectId, versionId, type, version, destDir, checkQuota }) {
   const list = await versions({ projectId, type, version });
   const target = versionId ? list.find((v) => v.id === versionId) : list[0];
   if (!target) throw new Error('没有找到与当前服务端类型/版本匹配的发布');
 
-  const { filename, url, sha1 } = target.file;
+  const { filename, url, sha1, size: declaredSize } = target.file;
   if (!/^[\w.\-+ ()\[\]]+\.jar$/i.test(filename)) throw new Error(`文件名异常,拒绝安装: ${filename}`);
   if (!/^https:\/\/cdn\.modrinth\.com\//.test(url)) throw new Error('下载地址不是 Modrinth CDN,拒绝安装');
+  if (checkQuota) {
+    const bad = checkQuota(declaredSize || 0);
+    if (bad) throw new Error(bad);
+  }
 
   await fsp.mkdir(destDir, { recursive: true });
   const tmp = path.join(destDir, `.mcsp-dl-${crypto.randomUUID().slice(0, 8)}`);
@@ -117,6 +126,13 @@ async function install({ projectId, versionId, type, version, destDir }) {
     for await (const chunk of res.body) {
       hash.update(chunk);
       size += chunk.length;
+      /* 边下边卡上限。声明体积只是 Modrinth 说的,真实流可以更长 ——
+         没有这道闸,一个谎报体积的响应就能把配额写穿(sha1 会在事后失败,
+         但那时字节已经落盘了)。 */
+      if (checkQuota) {
+        const bad = checkQuota(size);
+        if (bad) throw new Error(`${bad}(下载中止于 ${(size / 1048576).toFixed(1)} MB)`);
+      }
       if (!ws.write(chunk)) await new Promise((r) => ws.once('drain', r));
     }
     await new Promise((r, j) => ws.end((e) => (e ? j(e) : r())));

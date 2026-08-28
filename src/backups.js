@@ -231,6 +231,14 @@ function createBackup(inst, name, opts = {}) {
     inst.log('INFO', `[MCSP] 开始${mode === 'incremental' ? `增量(第 ${chain.nextSeq} 个)` : '全量'}备份到 ${id}`);
     if (inst.proc) inst.command('save-all');
     const tar = spawn('tar', args);
+    /* spawn 失败(PATH 里没有 tar、fork 时 EAGAIN)只触发 error 不触发 exit。
+       不挂这个监听的话:① 未处理的 error 事件 = uncaughtException;
+       ② 这个 Promise 永不 settle,调用方的 archiveBusy.delete 在 finally 里
+       也就永不执行 —— 该实例之后所有压缩/备份操作恒 409,只能重启面板。 */
+    tar.on('error', (e) => {
+      inst.log('ERROR', `[MCSP] 无法执行 tar: ${e.message}`);
+      resolve({ ok: false, error: `无法执行 tar: ${e.message}` });
+    });
     tar.on('exit', (code) => {
       if (code === 0) {
         const meta = readChains(inst);
@@ -274,8 +282,9 @@ function inspectBackup(inst, id) {
   return new Promise((resolve) => {
     const file = path.join(backupDir(inst), id);
     if (!fs.existsSync(file) || !id.endsWith('.tar.gz')) return resolve({ ok: false, error: '备份不存在' });
-    // -tzf 只读目录表;大包也就几秒,比解压便宜得多
-    const tar = spawn('tar', ['tzf', file]);
+    /* -tzvf 而不是 -tzf:带 v 才有每个条目的**未压缩体积**,恢复前的配额校验要靠它。
+       两者代价一样(都得把压缩流解出来读头部),只是多打印几列。 */
+    const tar = spawn('tar', ['tzvf', file]);
     let out = '';
     let err = '';
     tar.stdout.on('data', (d) => { out += d; });
@@ -286,7 +295,19 @@ function inspectBackup(inst, id) {
         // 这里失败基本等于包损坏 —— 正是要在覆盖之前发现的事
         return resolve({ ok: false, error: `归档无法读取,可能已损坏 (tar 退出码 ${code})${err ? ': ' + err.trim().slice(0, 200) : ''}` });
       }
-      const entries = out.split('\n').map((s) => s.replace(/^\.\//, '').trim()).filter(Boolean);
+      /* -tzvf 每行形如:
+           -rw-r--r-- root/root  12345 2026-08-28 10:00 ./world/level.dat
+         取第 3 列求和 = 未压缩总体积(配额校验用),末列之后是路径。
+         路径里可能有空格,所以按前 5 个字段切,剩下的整段当路径。 */
+      let totalBytes = 0;
+      const entries = out.split('\n').map((line) => {
+        const s = line.trim();
+        if (!s) return '';
+        const m = /^(\S+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(.*)$/.exec(s);
+        if (!m) return s.replace(/^\.\//, '');
+        totalBytes += parseInt(m[3], 10) || 0;
+        return m[6].replace(/^\.\//, '').trim();
+      }).filter(Boolean);
       const files = entries.filter((e) => !e.endsWith('/'));
       // 顶层条目:用户认得出"这个包里有 world / plugins / server.properties"
       const top = [...new Set(entries.map((e) => e.split('/')[0]).filter(Boolean))].sort();
@@ -301,6 +322,7 @@ function inspectBackup(inst, id) {
       resolve({
         ok: true,
         fileCount: files.length,
+        totalBytes,                       // 未压缩总体积,恢复前的配额校验用
         topLevel: top.slice(0, 200),
         worlds,
         hasPlugins: top.includes('plugins') || top.includes('mods'),
@@ -346,6 +368,11 @@ function restoreBackup(inst, id) {
       const tar = spawn('tar', args);
       let err = '';
       tar.stderr.on('data', (d) => { err += d; });
+      // 同上:spawn 失败只有 error,不挂就是 uncaughtException + Promise 永挂
+      tar.on('error', (e) => {
+        inst.log('ERROR', `[MCSP] 无法执行 tar: ${e.message}`);
+        resolve({ ok: false, error: `无法执行 tar: ${e.message}` });
+      });
       tar.on('exit', (code) => {
         if (code !== 0) {
           inst.log('ERROR', `[MCSP] 恢复中断于 ${path.basename(f)} (tar ${code})`);

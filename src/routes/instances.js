@@ -176,18 +176,43 @@ const LEVEL = { viewer: 1, operator: 2, manager: 3, owner: 4 };
 /* 日常运维:启停、发命令、做备份。这些不改配置也不动文件,
    交给"能帮我看服但别乱改东西"的人正好 */
 const OPERATOR_WRITES = [
-  /^\/(start|stop|restart|kill)$/,
+  /* 启停的真实路由是 `/:iid/server/:action`,所以这里看到的 req.path 是
+     `/server/start` 而不是 `/start`。原先写成 /^\/(start|…)$/ 永不匹配,
+     启停于是被判成 manager —— 方向上是失效关闭(不越权),但 operator 档
+     因此形同虚设:想给人启停权就只能给 manager,而 manager 能改文件改配置。
+     净效果是权限被迫放大,也和 README 承诺的分档对不上。 */
+  /^\/server\/(start|stop|restart|kill)$/,
   /^\/command$/,
   /^\/backups$/,
   /^\/players\/[^/]+\/(kick|ban|pardon|op|deop)$/,
+  // 注:`/rcon` 只有 GET(GET 一律 viewer),写操作是 `/rcon/enable` ——
+  // 那是往 server.properties 里写密码,属于改配置,留在 manager 是对的
+];
+
+/* 会读出**凭据或任意文件内容**的 GET,不能留在 viewer。
+   README 承诺的 viewer 是「看状态·日志·玩家」,而这几条一旦放开:
+     · /rcon        直接返回 rcon.password 明文
+     · /properties  readProps() 把整个 server.properties 端出来(含 rcon.password)
+     · /files/content /files/download  能读实例内任意文件,包括上面两个
+       和 Velocity 的 forwarding.secret(configs 里就列着)
+     · /backups/:id/download  一个归档 = 整个世界 + 全部配置 + 密钥
+   等于"只读"档能把实例的全部秘密拿走。文件访问在 README 的分档里本来
+   就属于 manager,这里只是让实现追上文档。 */
+const MANAGER_READS = [
   /^\/rcon$/,
+  /^\/properties$/,
+  /^\/files\/content$/,
+  /^\/files\/download$/,
+  /^\/backups\/[^/]+\/download$/,
 ];
 
 function requiredLevel(req) {
-  if (req.method === 'GET' || req.method === 'HEAD') return LEVEL.viewer;
   // 挂在 '/:iid' 上的 use,Express 已经把 /api/instances/<iid> 剥掉了,
-  // req.path 就是实例内的子路径('/start'、'/'…)。别再自己剥一次
+  // req.path 就是实例内的子路径('/server/start'、'/'…)。别再自己剥一次
   const sub = req.path || '/';
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    return MANAGER_READS.some((re) => re.test(sub)) ? LEVEL.manager : LEVEL.viewer;
+  }
   return OPERATOR_WRITES.some((re) => re.test(sub)) ? LEVEL.operator : LEVEL.manager;
 }
 
@@ -339,6 +364,9 @@ router.post('/', (req, res) => {
   installInstance(inst, {
     port: parseInt(port, 10) || 25565 + instances.size - 1,
     gamemode: ['survival', 'creative', 'adventure', 'spectator'].includes(gamemode) ? gamemode : 'survival',
+    // installInstance 支持 motd,之前调用方没传,那个参数一直是 undefined(死参数)。
+    // 前端也没有对应输入框,所以这里给个和实例同名的默认值,把链路接上
+    motd: String(name).trim().slice(0, 59),
   });
 });
 
@@ -502,6 +530,12 @@ router.patch('/:iid', asyncHandler(async (req, res) => {
 /* 克隆:复制整个实例目录,换 id / 名字 / 端口。受实例数、内存、磁盘三项配额约束。 */
 router.post('/:iid/clone', asyncHandler(async (req, res) => {
   const src = req.inst;
+  /* 克隆限主人/管理员。克隆出来的新实例 owner 是**调用者**,也就是说协作者
+     一旦能克隆,就等于能把别人的实例连同世界和 server.properties(里面有
+     rcon.password、velocity 的 forwarding.secret)整份复制成自己完全掌控的
+     实例 —— 绕过了"协作者不能把实例拿走"这条直觉边界。配额算在克隆者头上
+     所以不是配额问题,是数据外流。 */
+  if (!isOwnerOrAdmin(req, src)) return res.status(403).json({ ok: false, error: '只有实例主人可以克隆实例' });
   const name = String((req.body && req.body.name) || '').trim().slice(0, 40);
   if (!name) return res.status(400).json({ ok: false, error: '新实例名称不能为空' });
   // 边跑边拷世界会拿到一份撕裂的存档,而且往往要等玩家进服才暴露
@@ -578,8 +612,18 @@ router.post('/:iid/reinstall', asyncHandler(async (req, res) => {
 router.delete('/:iid', asyncHandler(async (req, res) => {
   const inst = req.inst;
   if (!isOwnerOrAdmin(req, inst)) return res.status(403).json({ ok: false, error: '只有实例主人可以删除实例' });
-  if (inst.state !== 'stopped') return res.status(400).json({ ok: false, error: '请先停止实例再删除' });
-  inst.cancelAutoRestart();     // 否则实例都删了,几秒后那个定时器还会来拉一次
+  /* importing 也放行:那是 POST /import 建的空壳,没有进程也没有数据,
+     而它唯一的出路 finalize 需要一个有效压缩包 —— 中途放弃的导入于是卡在这里,
+     删不掉也用不了(得重启面板才会因为 state 不落盘而变回 stopped)。
+     没有理由让用户为了删一个空壳去重启整个面板。 */
+  if (inst.state !== 'stopped' && inst.state !== 'importing') {
+    return res.status(400).json({ ok: false, error: '请先停止实例再删除' });
+  }
+  // 压缩/备份/解压正在读写实例目录时删掉它,tar 会写出残缺产物
+  if (archiveBusy.has(inst.id)) {
+    return res.status(409).json({ ok: false, error: '该实例有压缩/备份任务正在进行,请等它结束再删' });
+  }
+  inst.cancelAutoRestart();     // 否则实例都删了,几秒后那两个定时器还会来拉一次
   if (inst.tunnelProc) inst.stopTunnel();
   if (inst.rconTunnelProc) inst.stopRconTunnel();
   fs.rmSync(path.join(DATA_DIR, `frpc-${inst.id}.toml`), { force: true });
@@ -919,13 +963,19 @@ router.post('/:iid/plugins/install', asyncHandler(async (req, res) => {
   if (!projectId || !/^[\w-]{1,32}$/.test(String(projectId))) return res.status(400).json({ ok: false, error: '项目 ID 无效' });
   if (versionId && !/^[\w-]{1,32}$/.test(String(versionId))) return res.status(400).json({ ok: false, error: '版本 ID 无效' });
 
-  const dqerr = diskQuotaError(req, 64);      // jar 一般几 MB,给个宽松的预检额度
+  /* 原先这里写死 diskQuotaError(req, 64) —— 注释说"jar 一般几 MB,给个宽松的预检额度",
+     但整合包和大型模组远不止 64 MB,而 install 的下载是无界流式写入:只要剩余配额
+     ≥64 MB 就放行,之后写多少算多少。改成把真实体积交给 modrinth 去卡
+     (它的版本信息里本来就带 file.size),并在下载过程中按已写字节持续复查。 */
+  const checkQuota = (bytes) => diskQuotaError(req, bytes / 1048576);
+  const dqerr = checkQuota(0);                // 配额已经满了就不必发起请求
   if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
 
   try {
     const r = await modrinth.install({
       projectId, versionId, type: inst.type, version: inst.version,
       destDir: path.join(inst.dir, ext.name),
+      checkQuota,
     });
     disk.bump(inst.id, r.size / 1048576);
     inst.log('INFO', `[MCSP] 已安装${ext.noun} ${r.filename} (${(r.size / 1048576).toFixed(1)} MB${r.verified ? ', SHA-1 校验通过' : ''})`
@@ -1003,6 +1053,23 @@ router.get('/:iid/backups/:id/inspect', asyncHandler(async (req, res) => {
 router.post('/:iid/backups/:id/restore', asyncHandler(async (req, res) => {
   if (!isBackupId(req.params.id)) return res.status(404).json({ ok: false, error: '备份不存在' });
   if (req.inst.state !== 'stopped') return res.json({ ok: false, error: '请先停止实例再恢复备份' });
+
+  /* 恢复是第六条能往实例目录里写入大量数据的路径,原先它是唯一一条**不校验配额**的。
+     否则:备份 → 删掉实例里的文件(占用回落)→ 恢复 → 再来一轮,就能把占用推到配额之上。
+     算的是**净增长**(归档解开后的体积 - 当前实例占用):恢复是覆盖式的,
+     恢复一个和现在差不多大的包净增长约等于 0,不该被拦。
+     增量链按各归档之和取上界(增量里改过的文件会重复计),宁可偏保守。 */
+  const pre = await inspectBackup(req.inst, req.params.id);
+  if (!pre.ok) return res.json(pre);                    // 包损坏/链缺环,原样把原因回给用户
+  let needBytes = pre.totalBytes || 0;
+  for (const other of (pre.chain || []).filter((c) => c !== req.params.id)) {
+    const s = await inspectBackup(req.inst, other);
+    if (s.ok) needBytes += s.totalBytes || 0;
+  }
+  const growthMB = Math.max(0, needBytes / 1048576 - disk.instanceUsage(req.inst.id).instMB);
+  const dqerr = diskQuotaError(req, growthMB);
+  if (dqerr) return res.status(403).json({ ok: false, error: dqerr });
+
   // 恢复要往实例目录里解包,和备份/解压/打包必须互斥,否则解一半被另一个覆盖
   if (archiveBusy.has(req.inst.id)) {
     return res.status(409).json({ ok: false, error: '该实例已有压缩任务在进行中' });

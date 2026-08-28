@@ -558,7 +558,12 @@ class Instance {
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       if (this._restartAfterExit) {
         this._restartAfterExit = false;
-        setTimeout(() => {
+        /* 存 handle,让 cancelAutoRestart() 能清掉。原先这个定时器是"裸"的:
+           点重启 → 进程退出(此时 state 已是 stopped)→ 1 秒内点删除,
+           DELETE 的 stopped 守卫放行、目录被 rm,然后定时器照常触发 start(),
+           _appendLogFile 的 mkdirSync 又把刚删掉的实例目录建回来。 */
+        this._restartTimer = setTimeout(() => {
+          this._restartTimer = null;
           const r = this.start({ auto: true });
           if (!r.ok) this.log('ERROR', `[MCSP] 重启失败: ${r.error}`);
         }, 1000);
@@ -726,6 +731,11 @@ class Instance {
   cancelAutoRestart() {
     clearTimeout(this._crashTimer);
     this._crashTimer = null;
+    // 手动重启那条 1 秒的定时器也要一起清 —— 删实例时只清崩溃定时器的话,
+    // 实例都删了它还会把目录建回来
+    clearTimeout(this._restartTimer);
+    this._restartTimer = null;
+    this._restartAfterExit = false;
     this._crashTimes = [];
     this.autoRestartBlocked = false;
   }
@@ -747,13 +757,16 @@ class Instance {
       this.startedAt = Date.now();
       this.emitState();
     }
+    /* 玩家名放宽到 [\w.-]:`\w` 不含 `.` 和 `-`,而 Bedrock/Floodgate 的玩家名常带 `.`。
+       原先这两条正则匹配不上他们,于是在线列表和 playtime 统计里凭空少人 ——
+       但封禁接口用的是 [\w.-],同一个名字**能被封却不算在线**,口径自相矛盾。 */
     let pm;
-    if ((pm = message.match(/^(\w{1,16}) joined the game$/))) {
+    if ((pm = message.match(/^([\w.-]{1,16}) joined the game$/))) {
       this.players.add(pm[1]);
       playtime.onJoin(this.id, pm[1]);
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
       this.emitState();
-    } else if ((pm = message.match(/^(\w{1,16}) left the game$/))) {
+    } else if ((pm = message.match(/^([\w.-]{1,16}) left the game$/))) {
       this.players.delete(pm[1]);
       playtime.onLeave(this.id, pm[1]);
       bus.broadcast('players', { iid: this.id, players: this.playerList() });
@@ -1338,9 +1351,13 @@ class Instance {
       return;
     }
     this._tpsBusy = true;
+    /* 同样走 getProp 的缓存。原先这里写的是 `props['rcon.port']` —— 而 `props`
+       在本方法里根本不存在(只在 writeProps 那边有个同名局部变量),于是每次采样
+       都抛 ReferenceError。上面的 enable-rcon 判断刚好把它挡住了,所以只有
+       **真正开了 RCON 的用户**会踩到,而那正是这个功能的目标用户。 */
     require('./rcon').exec({
-      port: parseInt(props['rcon.port'], 10) || 25575,
-      password: props['rcon.password'],
+      port: parseInt(this.getProp('rcon.port'), 10) || 25575,
+      password: this.getProp('rcon.password'),
       command: 'tps',
     }).then((out) => {
       const p = parseTps(out);

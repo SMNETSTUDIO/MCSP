@@ -14,6 +14,48 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(express.json());
 
+/**
+ * CSRF 防护:所有会改状态的 /api 请求必须来自本站。
+ *
+ * 面板全靠 Cookie 会话,而 Cookie 是浏览器**自动**附带的 —— 没有这道校验,
+ * 任何网页都能在管理员登录着的时候对面板发 POST:删实例、改配额、
+ * 甚至 `POST /api/panel/import` 把整份 users.json(含攻击者的管理员口令)覆盖进去。
+ * `SameSite=Lax` 只挡住一部分场景,不是完整防护。
+ *
+ * 判定顺序,三种情况:
+ *   1. 带 `Authorization: Bearer` —— API Token 认证。浏览器不会自动附带这个头,
+ *      跨源加自定义头又会触发 CORS 预检(本站不发 CORS 头,预检必失败),
+ *      所以这类请求天然不是 CSRF。放行,否则所有脚本都会断。
+ *   2. 有 Sec-Fetch-Site / Origin —— 现代浏览器对非 GET 必发其一,按同源判定。
+ *   3. 两个都没有 —— curl / 老客户端 / 服务端到服务端。浏览器不会走到这里,
+ *      放行以免误伤自动化。
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+const TRUSTED_ORIGINS = String(process.env.MCSP_TRUSTED_ORIGINS || '')
+  .split(',').map((s) => s.trim()).filter(Boolean);
+
+app.use('/api', (req, res, next) => {
+  if (SAFE_METHODS.has(req.method)) return next();
+  if (/^Bearer\s+\S+/i.test(req.headers.authorization || '')) return next();   // ① API Token
+
+  const site = req.headers['sec-fetch-site'];
+  if (site) {                                                                  // ② 浏览器明说了
+    if (site === 'same-origin' || site === 'none') return next();
+    return res.status(403).json({ ok: false, code: 'csrf', error: '跨站请求被拒绝' });
+  }
+
+  const origin = req.headers.origin;
+  if (origin) {
+    if (TRUSTED_ORIGINS.includes(origin)) return next();
+    let host;
+    try { host = new URL(origin).host; } catch { host = null; }
+    if (host && host === req.headers.host) return next();
+    return res.status(403).json({ ok: false, code: 'csrf', error: '跨站请求被拒绝' });
+  }
+
+  return next();                                                               // ③ 非浏览器客户端
+});
+
 /* 健康检查(免鉴权,供探针/监控使用) */
 app.get('/api/health', (req, res) => {
   res.json({

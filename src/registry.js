@@ -24,15 +24,36 @@ function loadRegistry() {
     const inst = new Instance(meta);
     if (fs.existsSync(inst.dir)) instances.set(inst.id, inst);
   }
+  /* 必须走 collaboratorList() 归一化成用户名字符串。
+     bus.broadcast 用的是 `allowed.includes(username)`,而 collaborators 里存的
+     是 `{name, role}` 对象(PUT /:iid/collaborators 一律写成这个形态),
+     直接展开的话 includes 永远匹配不上 —— 表现为**通过当前 UI 添加的协作者
+     收不到任何 log/state/metrics/players 事件**,控制台不滚、状态不刷新,
+     而 REST 接口却正常,极容易被当成前端 bug 查半天。
+     老的纯字符串协作者反而是好的,所以这个问题只在新数据上出现。 */
   bus.resolveAllowed = (iid) => {
     const i = instances.get(iid);
-    return i ? [i.owner, ...i.collaborators] : null;
+    return i ? [i.owner, ...i.collaboratorList().map((c) => c.name)] : null;
   };
   saveRegistry();
 }
 
+/* 每个实例单独 try/catch:一个实例的采样炸了不该带走其他实例的曲线,更不该
+   带走整个面板 —— 这个回调在 setInterval 里,抛出去就是 uncaughtException。
+   不打 log:2 秒一次的重复报错会把控制台刷满,只记一次并置标志。 */
 function startMetricsLoop() {
-  setInterval(() => { for (const inst of instances.values()) inst.tickMetrics(); }, 2000);
+  setInterval(() => {
+    for (const inst of instances.values()) {
+      try {
+        inst.tickMetrics();
+      } catch (err) {
+        if (!inst._metricsErrLogged) {
+          inst._metricsErrLogged = true;
+          console.error(`[MCSP] 实例 ${inst.id} 指标采样异常(后续同类错误不再重复打印):`, err);
+        }
+      }
+    }
+  }, 2000);
 }
 
 /* 恢复时错峰:几个 MC 服同时启动会把磁盘和 CPU 顶满,谁都起不来 */
